@@ -12,7 +12,42 @@ pip install dynatrace-openfeature-provider-python
 
 ## Usage
 
-*Full usage documentation will be added in a future release.*
+```python
+from openfeature import api
+from openfeature.evaluation_context import EvaluationContext
+from dynatrace.openfeature import DynatraceProvider, DynatraceProviderOptions
+
+options = DynatraceProviderOptions.from_sdk_key(
+    'dt01.server_us_<key>.de848e97..._a1b2c3d4e5'
+)
+
+api.set_provider(DynatraceProvider(options))
+client = api.get_client()
+
+ctx = EvaluationContext(targeting_key='user-123')
+enabled = client.get_boolean_value('my-feature', False, ctx)
+
+# On shutdown:
+api.shutdown()
+```
+
+### CDN base URL override (labs / dev environments)
+
+```python
+options = DynatraceProviderOptions.from_sdk_key(
+    sdk_key,
+    cdn_base_url='https://cdn.us.fm.dynatracelabs.com/server',
+)
+```
+
+## Architecture
+
+The provider performs in-process flag evaluation using [flagd-core](https://github.com/open-feature/python-sdk-contrib/tree/main/tools/openfeature-flagd-core).
+On initialization it fetches a flagd-format JSON config from the Dynatrace CDN and polls for
+updates every 10 seconds. No external bucketing API is called during evaluation.
+
+State transitions follow [providers.md §4.1](https://github.com/Dynatrace/feature-management-knowledge-base):
+`NOT_READY → READY → STALE → ERROR`, with a 1-minute grace period before STALE → ERROR.
 
 ## Contributing
 
