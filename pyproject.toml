@@ -33,8 +33,8 @@ dev = [
     "poethepoet>=0.37.0",
     "pytest>=9.0.0,<10.0.0",
     "responses>=0.25.0,<1.0.0",
+    "pre-commit>=4.0.0",
     "ruff>=0.15.13",
-    "ruff>=0.15.0",
     "types-requests>=2.32.0,<3.0.0",
 ]
 
@@ -65,14 +65,26 @@ exclude = [".git", ".venv", "__pycache__", "venv"]
 
 [tool.ruff.lint]
 select = [
-    "A", "B", "C4", "C90", "E", "F", "FLY", "FURB", "I",
+    "A", "B", "C4", "C90", "E", "F", "FLY", "FURB", "I", "ICN003",
     "LOG", "N", "PERF", "PGH", "PLC", "PLR0913", "PLR0915",
-    "RUF", "S", "SIM", "T10", "T20", "UP", "W", "YTT",
+    "RUF", "S", "SIM", "T10", "T20", "TID251", "UP", "W", "YTT",
 ]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**/*" = ["S101"]
+
+[tool.ruff.lint.flake8-import-conventions]
+banned-from = ["typing"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"typing.Awaitable".msg = "Use collections.abc.Awaitable instead"
+"typing.Callable".msg = "Use collections.abc.Callable instead"
+"typing.Collection".msg = "Use collections.abc.Collection instead"
+"typing.Mapping".msg = "Use collections.abc.Mapping instead"
+"typing.MutableMapping".msg = "Use collections.abc.MutableMapping instead"
+"typing.MutableSequence".msg = "Use collections.abc.MutableSequence instead"
+"typing.Sequence".msg = "Use collections.abc.Sequence instead"
 
 [tool.ruff.lint.isort]
 known-first-party = ["dynatrace"]
