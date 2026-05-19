@@ -2,13 +2,13 @@ from __future__ import annotations
 
 import logging
 import time
+import typing
 from collections.abc import Callable
 from random import Random
-from typing import TypeVar
 
 log = logging.getLogger(__name__)
 
-T = TypeVar("T")
+T = typing.TypeVar("T")
 
 _MAX_ATTEMPTS = 5
 _BASE_DELAY_MS = 100.0
