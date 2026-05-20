@@ -34,10 +34,7 @@ api.shutdown()
 ### CDN base URL override (labs / dev environments)
 
 ```python
-options = DynatraceProviderOptions.from_sdk_key(
-    sdk_key,
-    cdn_base_url='https://cdn.us.fm.dynatracelabs.com/server',
-)
+options = DynatraceProviderOptions.from_sdk_key(sdk_key)
 ```
 
 ## Architecture

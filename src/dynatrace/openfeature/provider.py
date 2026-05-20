@@ -151,8 +151,9 @@ class DynatraceProvider(AbstractProvider):
         with self._state_lock:
             self._cancel_grace_timer()
             if self._state in (ProviderStatus.STALE, ProviderStatus.ERROR):
+                prev_state = self._state
                 self._state = ProviderStatus.READY
-                log.info('recovered from %s to READY', self._state)
+                log.info('recovered from %s to READY', prev_state)
                 self.emit_provider_ready(ProviderEventDetails(message='recovered'))
 
     def _on_fetch_failure(self, reason: str) -> None:
