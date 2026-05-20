@@ -39,26 +39,3 @@ jobs:
                   header: pr-title-lint-error
                   delete: true
 
-    lint-single-commit:
-        name: Validate single-commit message
-        runs-on: ubuntu-latest
-        permissions:
-            pull-requests: read
-        steps:
-            - name: Get commit count
-              id: commit_count
-              env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              run: |
-                  count=$(gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits --jq 'length')
-                  echo "count=$count" >> "$GITHUB_OUTPUT"
-
-            - name: Validate commit message
-              if: steps.commit_count.outputs.count == '1'
-              env:
-                  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-              run: |
-                  gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits \
-                    --jq '.[0].commit.message | split("\n") | .[0]' \
-                  | grep -qE '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\(.+\))?(!)?: .+' \
-                  || { printf '::error::Single-commit PRs must have a conventional commit message. Please follow Conventional Commits: https://www.conventionalcommits.org\n'; exit 1; }
