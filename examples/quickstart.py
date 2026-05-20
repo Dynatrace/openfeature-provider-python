@@ -5,7 +5,7 @@ import sys
 from openfeature import api
 from openfeature.evaluation_context import EvaluationContext
 
-from dynatrace.openfeature import DynatraceProvider, DynatraceProviderOptions
+from dynatrace.openfeature import DynatraceProvider
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,10 +21,7 @@ if not SDK_KEY:
     print("Set DT_SDK_KEY to your Dynatrace server SDK key and re-run.")
     sys.exit(1)
 
-options = DynatraceProviderOptions.from_sdk_key(SDK_KEY, cdn_base_url=CDN_BASE_URL)
-print(f"SDK key (public): {options.public_key}")
-
-api.set_provider(DynatraceProvider(options))
+api.set_provider(DynatraceProvider(SDK_KEY, cdn_base_url=CDN_BASE_URL))
 print("provider READY")
 
 client = api.get_client()
