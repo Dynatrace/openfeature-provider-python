@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 
 from ._cdn import FetchResult
@@ -10,9 +11,18 @@ log = logging.getLogger(__name__)
 
 
 class PollingManager:
+    """
+    Polls on a fixed-rate schedule anchored to request initiation, not completion.
+
+    A ticker thread fires every interval_s regardless of how long the previous
+    fetch took. When the ticker fires it cancels any in-flight poll and starts a
+    fresh one on a worker thread. Cancelled polls are silent: no emitFailure is
+    called.
+    """
+
     def __init__(
         self,
-        fetch_flags: Callable[[], FetchResult],
+        fetch_flags: Callable[[threading.Event | None], FetchResult],
         store_flags: Callable[[str], list[str]],
         emit_change: Callable[[list[str]], None],
         emit_success: Callable[[], None],
@@ -26,56 +36,84 @@ class PollingManager:
         self._emit_failure = emit_failure
         self._interval_s = interval_s
         self._stop_event = threading.Event()
-        self._thread: threading.Thread | None = None
+        self._current_cancel: threading.Event | None = None
+        self._ticker_thread: threading.Thread | None = None
 
     def start(self) -> None:
         self._stop_event.clear()
-        self._thread = threading.Thread(
-            target=self._poll_loop,
-            name='dt-provider-poller',
+        self._ticker_thread = threading.Thread(
+            target=self._ticker_loop,
+            name="dt-provider-ticker",
             daemon=True,
         )
-        self._thread.start()
+        self._ticker_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
-        if self._thread is not None:
-            self._thread.join(timeout=self._interval_s + 2.0)
+        cancel = self._current_cancel
+        if cancel is not None:
+            cancel.set()
+        if self._ticker_thread is not None:
+            self._ticker_thread.join(timeout=2.0)
 
-    def _poll_loop(self) -> None:
-        # Fixed-delay: wait first, then poll (mirrors Java scheduleWithFixedDelay initial delay).
-        # Event.wait() returns True if stop was requested, False on timeout.
-        while not self._stop_event.wait(self._interval_s):
-            self._poll()
+    def _ticker_loop(self) -> None:
+        next_tick = time.monotonic() + self._interval_s
+        while not self._stop_event.is_set():
+            wait = max(0.0, next_tick - time.monotonic())
+            if self._stop_event.wait(wait):
+                break
+            next_tick += self._interval_s
+            self._dispatch()
 
-    def _poll(self) -> None:
+    def _dispatch(self) -> None:
+        prev = self._current_cancel
+        if prev is not None:
+            prev.set()
+        cancel = threading.Event()
+        self._current_cancel = cancel
+        threading.Thread(
+            target=self._poll,
+            args=(cancel,),
+            name="dt-provider-poller",
+            daemon=True,
+        ).start()
+
+    def _poll(self, cancel: threading.Event) -> None:
         try:
-            result = self._fetch_flags()
+            result = self._fetch_flags(cancel)
+
+            if cancel.is_set():
+                log.debug("poll cancelled after fetch returned; discarding result")
+                return
 
             if result.is_not_modified:
-                log.debug('flags not modified')
+                log.debug("flags not modified")
                 self._emit_success()
                 return
 
             if result.is_rate_limited:
-                log.debug('rate limited; serving cached values')
+                log.debug("rate limited; serving cached values")
                 return
 
             if not result.is_success:
-                self._emit_failure(f'HTTP {result.status}')
+                self._emit_failure(f"HTTP {result.status}")
                 return
 
             body = result.body
             if not body:
-                self._emit_failure('empty response body')
+                self._emit_failure("empty response body")
                 return
 
             changed_keys = self._store_flags(body)
             self._emit_success()
 
             if changed_keys:
-                log.info('flag configuration changed: %s', changed_keys)
+                log.info("flag configuration changed: %s", changed_keys)
                 self._emit_change(changed_keys)
+
         except Exception as exc:
-            log.warning('poll failed', exc_info=exc)
+            if cancel.is_set():
+                log.debug("poll cancelled")
+                return
+            log.warning("poll failed", exc_info=exc)
             self._emit_failure(str(exc))

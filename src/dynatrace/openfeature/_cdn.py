@@ -14,7 +14,7 @@ from .options import DynatraceProviderOptions
 
 log = logging.getLogger(__name__)
 
-_REQUEST_TIMEOUT_S: float = 5.0
+REQUEST_TIMEOUT_S: float = 5.0
 _DEFAULT_RETRY_AFTER_MS: float = 60_000.0
 
 
@@ -66,18 +66,19 @@ class CdnFetcher:
         t = now if now is not None else float(self._clock())  # type: ignore[operator]
         return t < self._rate_limited_until
 
-    def fetch(self) -> FetchResult:
+    def fetch(self, cancel: threading.Event | None = None) -> FetchResult:
         if self.is_rate_limited():
-            log.debug('rate limited; skipping fetch')
+            log.debug("rate limited; skipping fetch")
             return FetchResult(429, None, None, None)
         if not self._fetch_lock.acquire(blocking=False):
-            log.debug('fetch already in progress; skipping')
+            log.debug("fetch already in progress; skipping")
             return FetchResult(304, None, None, None)
         try:
             return self._retry.execute(
                 self._do_fetch,
                 should_retry=lambda r: default_should_retry_status(r.status),
                 retryable_exceptions=(OSError, requests.RequestException),
+                cancel=cancel,
             )
         finally:
             self._fetch_lock.release()
@@ -86,15 +87,15 @@ class CdnFetcher:
         cache = self._cache
         headers: dict[str, str] = {}
         if cache.etag is not None:
-            headers['If-None-Match'] = cache.etag
+            headers["If-None-Match"] = cache.etag
         if cache.last_modified_header is not None:
-            headers['If-Modified-Since'] = cache.last_modified_header
+            headers["If-Modified-Since"] = cache.last_modified_header
 
         try:
             resp = self._session.get(
                 self._url,
                 headers=headers,
-                timeout=_REQUEST_TIMEOUT_S,
+                timeout=REQUEST_TIMEOUT_S,
             )
         except requests.RequestException:
             raise
@@ -103,14 +104,14 @@ class CdnFetcher:
             return FetchResult(304, None, cache.etag, cache.last_modified_header)
 
         if resp.status_code == 429:
-            retry_after = resp.headers.get('Retry-After')
+            retry_after = resp.headers.get("Retry-After")
             delay_ms = _parse_retry_after_ms(retry_after, float(self._clock()))  # type: ignore[operator]
             self._rate_limited_until = float(self._clock()) + delay_ms / 1000.0  # type: ignore[operator]
-            log.warning('rate limited (429); pausing fetches for %.0fms', delay_ms)
+            log.warning("rate limited (429); pausing fetches for %.0fms", delay_ms)
             return FetchResult(429, None, None, None)
 
-        new_etag = resp.headers.get('ETag')
-        new_last_modified = resp.headers.get('Last-Modified')
+        new_etag = resp.headers.get("ETag")
+        new_last_modified = resp.headers.get("Last-Modified")
         body = resp.text
 
         if resp.status_code >= 200 and resp.status_code < 300:
@@ -121,13 +122,12 @@ class CdnFetcher:
                 and not new_lm_at > cache.last_modified_at
             ):
                 log.warning(
-                    'CDN returned 200 but Last-Modified (%s) is not later than stored (%s);'
-                    ' treating as 304 (suspected stale node)',
+                    "CDN returned 200 but Last-Modified (%s) is not later than stored (%s);"
+                    " treating as 304 (suspected stale node)",
                     new_last_modified,
                     cache.last_modified_header,
                 )
                 return FetchResult(304, None, cache.etag, cache.last_modified_header)
-            # store only what this response gave us; never mix tokens across requests
             self._cache = _CacheState(
                 etag=new_etag,
                 last_modified_header=new_last_modified,
@@ -143,7 +143,7 @@ def _parse_http_date(value: str | None) -> datetime | None:
     try:
         return parsedate_to_datetime(value.strip())
     except Exception:
-        log.warning('unparseable HTTP-date %r', value)
+        log.warning("unparseable HTTP-date %r", value)
         return None
 
 
@@ -158,5 +158,5 @@ def _parse_retry_after_ms(retry_after: str | None, now: float) -> float:
         dt = parsedate_to_datetime(retry_after.strip())
         return max((dt.timestamp() - now) * 1000.0, 0.0)
     except Exception:
-        log.debug('unparseable Retry-After %r; using default', retry_after)
+        log.debug("unparseable Retry-After %r; using default", retry_after)
     return _DEFAULT_RETRY_AFTER_MS
