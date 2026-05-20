@@ -12,6 +12,7 @@ from openfeature.flag_evaluation import FlagResolutionDetails, FlagValueType
 from openfeature.hook import Hook
 from openfeature.provider import AbstractProvider, Metadata, ProviderStatus
 
+from ._cdn import REQUEST_TIMEOUT_S as _REQUEST_TIMEOUT_S
 from ._cdn import CdnFetcher
 from ._polling import PollingManager
 from .options import DynatraceProviderOptions
@@ -33,6 +34,11 @@ class DynatraceProvider(AbstractProvider):
         poll_interval_s: float = _POLL_INTERVAL_S,
         grace_period_s: float = _GRACE_PERIOD_S,
     ) -> None:
+        if fetcher is None and poll_interval_s <= _REQUEST_TIMEOUT_S:
+            raise ValueError(
+                f"poll_interval_s ({poll_interval_s}s) must be greater than the "
+                f"request timeout ({_REQUEST_TIMEOUT_S}s)"
+            )
         self._options = options
         self._flagd_core = flagd_core or FlagdCore()
         self._fetcher = fetcher or CdnFetcher(options)
