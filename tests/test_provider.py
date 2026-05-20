@@ -8,28 +8,28 @@ import responses as rsps_lib
 from openfeature.exception import FlagNotFoundError
 from openfeature.provider import ProviderStatus
 
-from dynatrace.openfeature import DynatraceProvider, DynatraceProviderOptions
+from dynatrace.openfeature import DynatraceProvider
 from dynatrace.openfeature._cdn import CdnFetcher
 from dynatrace.openfeature._retry import RetryStrategy
+from dynatrace.openfeature.options import DynatraceProviderOptions
 
 _KEY = 'dt01.server_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5'
 _CDN_URL = 'https://cdn.us.fm.dynatrace.com/server/' + _KEY + '.json'
 _FIXTURE = Path(__file__).parent / 'fixtures' / 'flag-config.json'
 
 
-def _fast_fetcher(opts: DynatraceProviderOptions) -> CdnFetcher:
+def _fast_fetcher(key: str = _KEY) -> CdnFetcher:
     retry = RetryStrategy(rng=Random(0), sleeper=lambda _: None)  # noqa: S311
-    return CdnFetcher(opts, retry)
+    return CdnFetcher(DynatraceProviderOptions.from_sdk_key(key), retry)
 
 
 def _make_provider(
     grace_s: float = 60.0,
     poll_s: float = 600.0,
 ) -> DynatraceProvider:
-    opts = DynatraceProviderOptions.from_sdk_key(_KEY)
     return DynatraceProvider(
-        opts,
-        fetcher=_fast_fetcher(opts),
+        _KEY,
+        fetcher=_fast_fetcher(),
         poll_interval_s=poll_s,
         grace_period_s=grace_s,
     )
@@ -96,8 +96,7 @@ class TestEvaluation:
             self._provider.resolve_boolean_details('no-such-flag', False)
 
     def test_flag_not_found_before_init(self) -> None:
-        opts = DynatraceProviderOptions.from_sdk_key(_KEY)
-        p = DynatraceProvider(opts, fetcher=_fast_fetcher(opts))
+        p = DynatraceProvider(_KEY, fetcher=_fast_fetcher())
         with pytest.raises(FlagNotFoundError):
             p.resolve_boolean_details('my-bool-flag', False)
 
