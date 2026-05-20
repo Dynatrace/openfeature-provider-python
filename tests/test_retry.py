@@ -90,7 +90,7 @@ class TestRetryStrategyExecute:
                 retryable_exceptions=(OSError,),
             )
 
-    def test_non_retryable_exception_propagates_immediately(self) -> None:
+    def test_non_retryable_exception_wrapped_as_os_error(self) -> None:
         calls = 0
 
         def fn() -> int:

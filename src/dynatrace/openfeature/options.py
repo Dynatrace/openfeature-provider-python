@@ -35,7 +35,8 @@ class DynatraceProviderOptions:
             )
         _token, _platform, geo, _rand, _secret, _sha = m.groups()
         if cdn_base_url is not None:
-            if not cdn_base_url.strip():
+            cdn_base_url = cdn_base_url.strip()
+            if not cdn_base_url:
                 raise ValueError("cdn_base_url must not be blank")
             base = cdn_base_url if cdn_base_url.endswith("/") else cdn_base_url + "/"
         else:
@@ -46,7 +47,8 @@ class DynatraceProviderOptions:
     @property
     def public_key(self) -> str:
         # Everything before the last '.' — safe to log; never exposes the secret segment.
-        return self._key[: self._key.rfind(".")]
+        idx = self._key.rfind(".")
+        return self._key[:idx] if idx > 0 else self._key
 
     @property
     def cdn_url(self) -> str:
