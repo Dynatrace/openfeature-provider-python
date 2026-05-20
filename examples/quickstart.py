@@ -22,7 +22,7 @@ if not SDK_KEY:
     sys.exit(1)
 
 options = DynatraceProviderOptions.from_sdk_key(SDK_KEY, cdn_base_url=CDN_BASE_URL)
-print(f"CDN URL: {options.cdn_url}")
+print(f"SDK key (public): {options.public_key}")
 
 api.set_provider(DynatraceProvider(options))
 print("provider READY")

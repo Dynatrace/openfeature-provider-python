@@ -15,7 +15,6 @@ from dynatrace.openfeature._retry import RetryStrategy
 _KEY = 'dt01.server_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5'
 _CDN_URL = 'https://cdn.us.fm.dynatrace.com/server/' + _KEY + '.json'
 _FIXTURE = Path(__file__).parent / 'fixtures' / 'flag-config.json'
-_MINIMAL = Path(__file__).parent / 'fixtures' / 'minimal-flags.json'
 
 
 def _fast_fetcher(opts: DynatraceProviderOptions) -> CdnFetcher:
