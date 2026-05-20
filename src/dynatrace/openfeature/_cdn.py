@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parsedate_to_datetime
@@ -52,18 +53,18 @@ class CdnFetcher:
         retry_strategy: RetryStrategy | None = None,
         *,
         session: requests.Session | None = None,
-        clock: object = None,
+        clock: Callable[[], float] | None = None,
     ) -> None:
         self._url = options.cdn_url
         self._retry = retry_strategy or RetryStrategy()
         self._session = session or requests.Session()
-        self._clock: object = clock or time.time
+        self._clock: Callable[[], float] = clock or time.time
         self._cache = _CacheState()
         self._rate_limited_until: float = 0.0
         self._fetch_lock = threading.Lock()
 
     def is_rate_limited(self, now: float | None = None) -> bool:
-        t = now if now is not None else float(self._clock())  # type: ignore[operator]
+        t = now if now is not None else self._clock()
         return t < self._rate_limited_until
 
     def fetch(self, cancel: threading.Event | None = None) -> FetchResult:
@@ -105,8 +106,8 @@ class CdnFetcher:
 
         if resp.status_code == 429:
             retry_after = resp.headers.get("Retry-After")
-            delay_ms = _parse_retry_after_ms(retry_after, float(self._clock()))  # type: ignore[operator]
-            self._rate_limited_until = float(self._clock()) + delay_ms / 1000.0  # type: ignore[operator]
+            delay_ms = _parse_retry_after_ms(retry_after, self._clock())
+            self._rate_limited_until = self._clock() + delay_ms / 1000.0
             log.warning("rate limited (429); pausing fetches for %.0fms", delay_ms)
             return FetchResult(429, None, None, None)
 
