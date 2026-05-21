@@ -44,21 +44,21 @@ class TestFromSdkKey:
         opts = DynatraceProviderOptions.from_sdk_key(eu_key)
         assert "cdn.eu.fm.dynatrace.com" in opts.cdn_url
 
-    def test_cdn_base_url_override(self) -> None:
+    def test_config_origin_override(self) -> None:
         opts = DynatraceProviderOptions.from_sdk_key(
-            _VALID_KEY, cdn_base_url="https://cdn.us.fm.dynatracelabs.com/server"
+            _VALID_KEY, config_origin="https://cdn.us.fm.dynatracelabs.com"
         )
         assert opts.cdn_url.startswith("https://cdn.us.fm.dynatracelabs.com/server/")
 
-    def test_cdn_base_url_trailing_slash_normalised(self) -> None:
+    def test_config_origin_trailing_slash_normalised(self) -> None:
         opts_slash = DynatraceProviderOptions.from_sdk_key(
-            _VALID_KEY, cdn_base_url="https://example.com/server/"
+            _VALID_KEY, config_origin="https://example.com/"
         )
         opts_no_slash = DynatraceProviderOptions.from_sdk_key(
-            _VALID_KEY, cdn_base_url="https://example.com/server"
+            _VALID_KEY, config_origin="https://example.com"
         )
         assert opts_slash.cdn_url == opts_no_slash.cdn_url
 
-    def test_blank_cdn_base_url_raises(self) -> None:
+    def test_blank_config_origin_raises(self) -> None:
         with pytest.raises(ValueError, match="blank"):
-            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, cdn_base_url="  ")
+            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin="  ")

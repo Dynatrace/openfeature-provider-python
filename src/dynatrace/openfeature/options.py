@@ -20,7 +20,7 @@ class DynatraceProviderOptions:
     def from_sdk_key(
         cls,
         sdk_key: str,
-        cdn_base_url: str | None = None,
+        config_origin: str | None = None,
     ) -> DynatraceProviderOptions:
         if not sdk_key or not sdk_key.strip():
             raise ValueError("sdk_key must not be null or blank")
@@ -33,14 +33,15 @@ class DynatraceProviderOptions:
                 f"invalid key format (public: {public_part!r}); "
                 "expected dt{NN}.server_{geo}_{rand}.{secret}_{sha}"
             )
-        _token, _platform, geo, _rand, _secret, _sha = key_match.groups()
-        if cdn_base_url is not None:
-            cdn_base_url = cdn_base_url.strip()
-            if not cdn_base_url:
-                raise ValueError("cdn_base_url must not be blank")
-            base = cdn_base_url if cdn_base_url.endswith("/") else cdn_base_url + "/"
+        _token, platform, geo, _rand, _secret, _sha = key_match.groups()
+        if config_origin is not None:
+            config_origin = config_origin.strip()
+            if not config_origin:
+                raise ValueError("config_origin must not be blank")
+            origin = config_origin.rstrip("/")
+            base = origin + "/" + platform + "/"
         else:
-            base = f"https://cdn.{geo}.fm.dynatrace.com/server/"
+            base = f"https://cdn.{geo}.fm.dynatrace.com/{platform}/"
         cdn_url = base + trimmed + ".json"
         return cls(key=trimmed, cdn_url=cdn_url)
 

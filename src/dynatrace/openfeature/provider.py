@@ -31,13 +31,13 @@ class DynatraceProvider(AbstractProvider):
         self,
         sdk_key: str,
         *,
-        cdn_base_url: str | None = None,
+        config_origin: str | None = None,
         flagd_core: FlagdCore | None = None,
         fetcher: CdnFetcher | None = None,
         poll_interval_s: float = _POLL_INTERVAL_S,
         grace_period_s: float = _GRACE_PERIOD_S,
     ) -> None:
-        options = DynatraceProviderOptions.from_sdk_key(sdk_key, cdn_base_url=cdn_base_url)
+        options = DynatraceProviderOptions.from_sdk_key(sdk_key, config_origin=config_origin)
         if fetcher is None and poll_interval_s <= _REQUEST_TIMEOUT_S:
             raise ValueError(
                 f"poll_interval_s ({poll_interval_s}s) must be greater than the "
