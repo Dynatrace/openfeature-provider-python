@@ -49,7 +49,7 @@ class DynatraceProvider(AbstractProvider):
         self,
         sdk_key: str,
         *,
-        cdn_base_url: str | None = None,
+        config_origin: str | None = None,
         metrics_url: str | None = None,
         flagd_core: FlagdCore | None = None,
         fetcher: CdnFetcher | None = None,
@@ -59,7 +59,7 @@ class DynatraceProvider(AbstractProvider):
         metrics_flush_interval_s: float = _METRICS_FLUSH_INTERVAL_S,
     ) -> None:
         options = DynatraceProviderOptions.from_sdk_key(
-            sdk_key, cdn_base_url=cdn_base_url, metrics_url=metrics_url
+            sdk_key, config_origin=config_origin, metrics_url=metrics_url
         )
         if fetcher is None and poll_interval_s <= _REQUEST_TIMEOUT_S:
             raise ValueError(

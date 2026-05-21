@@ -15,13 +15,13 @@ logging.basicConfig(
 )
 
 SDK_KEY = os.environ.get("DT_SDK_KEY", "")
-CDN_BASE_URL = os.environ.get("DT_CDN_BASE_URL", None)
+CONFIG_ORIGIN = os.environ.get("DT_CONFIG_ORIGIN", None)
 
 if not SDK_KEY:
     print("Set DT_SDK_KEY to your Dynatrace server SDK key and re-run.")  # noqa: T201
     sys.exit(1)
 
-api.set_provider(DynatraceProvider(SDK_KEY, cdn_base_url=CDN_BASE_URL))
+api.set_provider(DynatraceProvider(SDK_KEY, config_origin=CONFIG_ORIGIN))
 print("provider READY")  # noqa: T201
 
 client = api.get_client()
