@@ -163,7 +163,7 @@ class TestPollingManagerThreading:
             call_count[0] += 1
             if call_count[0] == 1:
                 started.set()
-                time.sleep(10)  # blocks until cancelled
+                (cancel or threading.Event()).wait(10)  # blocks until cancelled or timeout
             else:
                 second_started.set()
             return _304
@@ -189,7 +189,7 @@ class TestPollingManagerThreading:
         def fetch(cancel=None) -> FetchResult:
             call_count[0] += 1
             if call_count[0] == 1:
-                time.sleep(10)
+                (cancel or threading.Event()).wait(10)
             else:
                 second_started.set()
             return _304
@@ -212,7 +212,7 @@ class TestPollingManagerThreading:
 
         def fetch(cancel=None) -> FetchResult:
             started.set()
-            time.sleep(10)
+            (cancel or threading.Event()).wait(10)
             return _304
 
         pm = PollingManager(

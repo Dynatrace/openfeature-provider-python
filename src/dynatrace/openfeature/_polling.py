@@ -40,6 +40,8 @@ class PollingManager:
         self._ticker_thread: threading.Thread | None = None
 
     def start(self) -> None:
+        if self._ticker_thread is not None and self._ticker_thread.is_alive():
+            return
         self._stop_event.clear()
         self._ticker_thread = threading.Thread(
             target=self._ticker_loop,
@@ -66,6 +68,8 @@ class PollingManager:
             self._dispatch()
 
     def _dispatch(self) -> None:
+        if self._stop_event.is_set():
+            return
         prev = self._current_cancel
         if prev is not None:
             prev.set()
@@ -84,6 +88,10 @@ class PollingManager:
 
             if cancel.is_set():
                 log.debug("poll cancelled after fetch returned; discarding result")
+                return
+
+            if result.is_skipped:
+                log.debug("fetch skipped (lock contention); retaining cached state")
                 return
 
             if result.is_not_modified:

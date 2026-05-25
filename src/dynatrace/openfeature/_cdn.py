@@ -27,6 +27,10 @@ class FetchResult:
     last_modified: str | None
 
     @property
+    def is_skipped(self) -> bool:
+        return self.status == -1
+
+    @property
     def is_not_modified(self) -> bool:
         return self.status == 304
 
@@ -46,18 +50,21 @@ class _CacheState:
     last_modified_at: datetime | None = None
 
 
+def _should_retry_fetch(result: FetchResult) -> bool:
+    return default_should_retry_status(result.status)
+
+
 class CdnFetcher:
     def __init__(
         self,
         options: DynatraceProviderOptions,
         retry_strategy: RetryStrategy | None = None,
         *,
-        session: requests.Session | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._url = options.cdn_url
         self._retry = retry_strategy or RetryStrategy()
-        self._session = session or requests.Session()
+        self._session = requests.Session()
         self._clock: Callable[[], float] = clock or time.time
         self._cache = _CacheState()
         self._rate_limited_until: float = 0.0
@@ -73,11 +80,11 @@ class CdnFetcher:
             return FetchResult(429, None, None, None)
         if not self._fetch_lock.acquire(blocking=False):
             log.debug("fetch already in progress; skipping")
-            return FetchResult(304, None, None, None)
+            return FetchResult(-1, None, None, None)
         try:
             return self._retry.execute(
                 self._do_fetch,
-                should_retry=lambda r: default_should_retry_status(r.status),
+                should_retry=_should_retry_fetch,
                 retryable_exceptions=(OSError, requests.RequestException),
                 cancel=cancel,
             )
