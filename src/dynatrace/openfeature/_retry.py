@@ -37,7 +37,7 @@ class RetryStrategy:
         retryable_exceptions: tuple[type[BaseException], ...] = (OSError,),
         cancel: threading.Event | None = None,
     ) -> T:
-        last_exc: BaseException | None = None
+        last_exception: BaseException | None = None
         last_result: T | None = None
         delay_ms = _BASE_DELAY_MS
 
@@ -50,7 +50,7 @@ class RetryStrategy:
                 log.warning("attempt %d/%d returned retryable result; retrying",
                             attempt, _MAX_ATTEMPTS)
             except retryable_exceptions as exc:
-                last_exc = exc
+                last_exception = exc
                 log.warning("attempt %d/%d failed: %s; retrying",
                             attempt, _MAX_ATTEMPTS, exc)
             except Exception as exc:
@@ -63,8 +63,8 @@ class RetryStrategy:
 
         if last_result is not None:
             return last_result
-        if last_exc is not None:
-            raise last_exc
+        if last_exception is not None:
+            raise last_exception
         raise OSError("all retry attempts failed")
 
     def _backoff(self, delay_ms: float, cancel: threading.Event | None) -> float:
