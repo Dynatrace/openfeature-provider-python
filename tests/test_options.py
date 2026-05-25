@@ -62,3 +62,13 @@ class TestFromSdkKey:
     def test_blank_config_origin_raises(self) -> None:
         with pytest.raises(ValueError, match="blank"):
             DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin="  ")
+
+    def test_config_origin_with_path_raises(self) -> None:
+        with pytest.raises(ValueError, match="path"):
+            DynatraceProviderOptions.from_sdk_key(
+                _VALID_KEY, config_origin="https://example.com/server"
+            )
+        with pytest.raises(ValueError, match="path"):
+            DynatraceProviderOptions.from_sdk_key(
+                _VALID_KEY, config_origin="https://example.com/server/path"
+            )

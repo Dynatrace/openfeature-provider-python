@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 # SDK key format per providers.md §3.0:
 # {token}.server_{geo}_{publicRandom}.{secret}_{sha1}
@@ -38,6 +39,12 @@ class DynatraceProviderOptions:
             config_origin = config_origin.strip()
             if not config_origin:
                 raise ValueError("config_origin must not be blank")
+            parsed = urlparse(config_origin)
+            path = parsed.path.rstrip("/")
+            if path:
+                raise ValueError(
+                    f"config_origin must not include a path; got {config_origin!r}"
+                )
             origin = config_origin.rstrip("/")
             base = origin + "/" + platform + "/"
         else:
