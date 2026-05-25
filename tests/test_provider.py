@@ -1,16 +1,14 @@
 import json
 import threading
 from pathlib import Path
-from random import Random
 
 import pytest
 import responses as rsps_lib
-from openfeature.exception import FlagNotFoundError
+from openfeature.exception import FlagNotFoundError, GeneralError
 from openfeature.provider import ProviderStatus
 
 from dynatrace.openfeature import DynatraceProvider
 from dynatrace.openfeature._cdn import CdnFetcher
-from dynatrace.openfeature._retry import RetryStrategy
 from dynatrace.openfeature.options import DynatraceProviderOptions
 
 _KEY = 'dt01.server_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5'
@@ -19,8 +17,7 @@ _FIXTURE = Path(__file__).parent / 'fixtures' / 'flag-config.json'
 
 
 def _fast_fetcher(key: str = _KEY) -> CdnFetcher:
-    retry = RetryStrategy(rng=Random(0), sleeper=lambda _: None)  # noqa: S311
-    return CdnFetcher(DynatraceProviderOptions.from_sdk_key(key), retry)
+    return CdnFetcher(DynatraceProviderOptions.from_sdk_key(key))
 
 
 def _make_provider(
@@ -48,14 +45,14 @@ class TestInitialize:
     def test_init_failure_on_404_raises(self) -> None:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=404)
         p = _make_provider()
-        with pytest.raises(Exception, match='HTTP 404'):
+        with pytest.raises(GeneralError, match='HTTP 404'):
             p.initialize()
 
     @rsps_lib.activate
     def test_init_failure_on_empty_body_raises(self) -> None:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body='', status=200)
         p = _make_provider()
-        with pytest.raises(Exception, match='empty'):
+        with pytest.raises(GeneralError, match='empty'):
             p.initialize()
 
 
@@ -105,22 +102,25 @@ class TestStateMachine:
     @rsps_lib.activate
     def test_ready_to_stale_on_poll_failure(self) -> None:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
-        p = _make_provider(poll_s=0.05, grace_s=60.0)
+        # poll_s=2.0 gives the 5-attempt retry cycle (~1.5s) time to complete before
+        # the next tick cancels it; the realistic STALE trigger is exhausted 5xx retries
+        p = _make_provider(poll_s=2.0, grace_s=60.0)
         p.initialize()
         stale_event = threading.Event()
         # register a stale listener
         original = p.emit_provider_stale
+
         def on_stale(details: object) -> None:
             original(details)  # type: ignore[arg-type]
             stale_event.set()
         p.emit_provider_stale = on_stale  # type: ignore[method-assign]
-        # now fail CDN
+        # 5x 500 exhausts the retry budget before the next tick cancels the poll
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
-        assert stale_event.wait(timeout=3.0), 'never transitioned to STALE'
+        assert stale_event.wait(timeout=5.0), 'never transitioned to STALE'
         assert p._state == ProviderStatus.STALE
         p.shutdown()
 

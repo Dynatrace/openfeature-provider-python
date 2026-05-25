@@ -30,7 +30,7 @@ client = api.get_client()
 def eval_flags(ctx: EvaluationContext) -> None:
     b = client.get_boolean_details("boolean-flag", False, ctx)
     s = client.get_string_details("string-flag", "", ctx)
-    n = client.get_float_details("number-flag", 0, ctx)
+    n = client.get_float_details("number-flag", 0.0, ctx)
     bv = f'variant="{b.variant or ""}"'
     sv = f'variant="{s.variant or ""}"'
     nv = f'variant="{n.variant or ""}"'
