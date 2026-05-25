@@ -4,6 +4,8 @@ import logging
 import threading
 from collections.abc import Mapping, Sequence
 
+import requests
+
 from openfeature.contrib.tools.flagd.core import FlagdCore
 from openfeature.evaluation_context import EvaluationContext
 from openfeature.event import ProviderEventDetails
@@ -60,10 +62,12 @@ class DynatraceProvider(AbstractProvider):
         return []
 
     def initialize(self, evaluation_context: EvaluationContext | None = None) -> None:
-        log.info('initializing Dynatrace provider (cdn_url=%s)', self._options.public_key)
+        with self._shutdown_lock:
+            self._shutting_down = False
+        log.info('initializing Dynatrace provider (key=%s)', self._options.public_key)
         try:
             result = self._fetcher.fetch()
-        except OSError as exc:
+        except (OSError, requests.RequestException) as exc:
             raise GeneralError(f'initial CDN fetch failed: {exc}') from exc
 
         if not result.is_success:
