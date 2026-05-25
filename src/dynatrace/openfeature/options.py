@@ -25,15 +25,15 @@ class DynatraceProviderOptions:
         if not sdk_key or not sdk_key.strip():
             raise ValueError("sdk_key must not be null or blank")
         trimmed = sdk_key.strip()
-        m = _KEY_PATTERN.match(trimmed)
-        if not m:
+        key_match = _KEY_PATTERN.match(trimmed)
+        if not key_match:
             last_dot = trimmed.rfind(".")
             public_part = trimmed[:last_dot] if last_dot > 0 else "<redacted>"
             raise ValueError(
                 f"invalid key format (public: {public_part!r}); "
                 "expected dt{NN}.server_{geo}_{rand}.{secret}_{sha}"
             )
-        _token, _platform, geo, _rand, _secret, _sha = m.groups()
+        _token, _platform, geo, _rand, _secret, _sha = key_match.groups()
         if cdn_base_url is not None:
             cdn_base_url = cdn_base_url.strip()
             if not cdn_base_url:
@@ -48,7 +48,7 @@ class DynatraceProviderOptions:
     def public_key(self) -> str:
         # Everything before the last '.' — safe to log; never exposes the secret segment.
         idx = self._key.rfind(".")
-        return self._key[:idx] if idx > 0 else self._key
+        return self._key[:idx] if idx > 0 else "<redacted>"
 
     @property
     def cdn_url(self) -> str:
