@@ -1,23 +1,31 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "release-type": "python",
-  "prerelease": true,
-  "prerelease-type": "alpha",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "include-component-in-tag": false,
+      "versioning": "default",
+      "prerelease": true,
+      "prerelease-type": "alpha",
+      "bump-minor-pre-major": true,
+      "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        "src/dynatrace/openfeature/__init__.py"
+      ]
+    }
+  },
   "changelog-sections": [
-    {"type": "feat", "section": "Features"},
-    {"type": "fix", "section": "Bug Fixes"},
-    {"type": "perf", "section": "Performance Improvements"},
-    {"type": "deps", "section": "Dependencies"},
-    {"type": "build", "section": "Build System"},
-    {"type": "revert", "section": "Reverts"},
-    {"type": "docs", "section": "Documentation", "hidden": true},
-    {"type": "style", "section": "Styles", "hidden": true},
-    {"type": "chore", "section": "Chores", "hidden": true},
-    {"type": "refactor", "section": "Refactoring", "hidden": true},
-    {"type": "test", "section": "Tests", "hidden": true},
-    {"type": "ci", "section": "Continuous Integration", "hidden": true}
-  ],
-  "extra-files": [
-    "src/dynatrace/openfeature/__init__.py"
+    { "type": "feat", "section": "✨ New Features" },
+    { "type": "fix", "section": "🐛 Bug Fixes" },
+    { "type": "chore", "section": "🧹 Chore" },
+    { "type": "docs", "section": "📚 Documentation" },
+    { "type": "perf", "section": "🚀 Performance" },
+    { "type": "build", "hidden": true, "section": "🛠️ Build" },
+    { "type": "deps", "section": "📦 Dependencies" },
+    { "type": "ci", "hidden": true, "section": "🚦 CI" },
+    { "type": "refactor", "section": "🔄 Refactoring" },
+    { "type": "revert", "section": "🔙 Reverts" },
+    { "type": "style", "hidden": true, "section": "🎨 Styling" },
+    { "type": "test", "hidden": true, "section": "🧪 Tests" }
   ]
 }
