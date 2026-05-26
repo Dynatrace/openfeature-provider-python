@@ -8,10 +8,7 @@
       "prerelease": true,
       "prerelease-type": "alpha",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true,
-      "extra-files": [
-        "src/dynatrace/openfeature/__init__.py"
-      ]
+      "bump-patch-for-minor-pre-major": true
     }
   },
   "changelog-sections": [
