@@ -9,8 +9,7 @@ class TestFromSdkKey:
     def test_valid_key_parses(self) -> None:
         opts = DynatraceProviderOptions.from_sdk_key(_VALID_KEY)
         assert opts.cdn_url == (
-            "https://cdn.us.fm.dynatrace.com/server/"
-            + _VALID_KEY + ".json"
+            "https://cdn.us.fm.dynatrace.com/server/" + _VALID_KEY + ".json"
         )
 
     def test_public_key_excludes_secret(self) -> None:

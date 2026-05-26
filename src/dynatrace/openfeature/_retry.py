@@ -47,12 +47,16 @@ class RetryStrategy:
                 last_result = result
                 if not should_retry(result):
                     return result
-                log.warning("attempt %d/%d returned retryable result; retrying",
-                            attempt, _MAX_ATTEMPTS)
+                log.warning(
+                    "attempt %d/%d returned retryable result; retrying",
+                    attempt,
+                    _MAX_ATTEMPTS,
+                )
             except retryable_exceptions as exc:
                 last_exception = exc
-                log.warning("attempt %d/%d failed: %s; retrying",
-                            attempt, _MAX_ATTEMPTS, exc)
+                log.warning(
+                    "attempt %d/%d failed: %s; retrying", attempt, _MAX_ATTEMPTS, exc
+                )
             except Exception as exc:
                 raise OSError("unexpected error during fetch") from exc
 
