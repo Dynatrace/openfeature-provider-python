@@ -68,7 +68,7 @@ class DynatraceProvider(AbstractProvider):
         try:
             result = self._fetcher.fetch()
         except (OSError, requests.RequestException) as exc:
-            raise GeneralError(f'initial CDN fetch failed: {exc}') from exc
+            raise GeneralError(f'initial CDN fetch failed: {type(exc).__name__}') from exc
 
         if not result.is_success:
             raise GeneralError(f'initial CDN fetch returned HTTP {result.status}')
@@ -84,6 +84,10 @@ class DynatraceProvider(AbstractProvider):
 
         with self._state_lock:
             self._state = ProviderStatus.READY
+
+        if self._poller is not None:
+            self._poller.stop()
+            self._poller = None
 
         self._poller = PollingManager(
             fetch_flags=self._fetcher.fetch,
