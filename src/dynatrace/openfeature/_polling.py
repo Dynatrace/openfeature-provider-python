@@ -52,11 +52,11 @@ class PollingManager:
 
     def stop(self) -> None:
         self._stop_event.set()
+        if self._ticker_thread is not None:
+            self._ticker_thread.join(timeout=2.0)
         cancel = self._current_cancel
         if cancel is not None:
             cancel.set()
-        if self._ticker_thread is not None:
-            self._ticker_thread.join(timeout=2.0)
 
     def _ticker_loop(self) -> None:
         next_tick = time.monotonic() + self._interval_s
@@ -65,6 +65,9 @@ class PollingManager:
             if self._stop_event.wait(wait):
                 break
             next_tick += self._interval_s
+            now = time.monotonic()
+            if next_tick < now:
+                next_tick = now + self._interval_s
             self._dispatch()
 
     def _dispatch(self) -> None:
@@ -124,4 +127,4 @@ class PollingManager:
                 log.debug("poll cancelled")
                 return
             log.warning("poll failed", exc_info=exc)
-            self._emit_failure(str(exc))
+            self._emit_failure(type(exc).__name__)
