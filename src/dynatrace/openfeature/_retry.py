@@ -18,17 +18,8 @@ _MAX_JITTER_FACTOR = 0.20
 
 
 class RetryStrategy:
-    def __init__(
-        self,
-        rng: Random | None = None,
-        sleeper: Callable[[float], None] | None = None,
-    ) -> None:
+    def __init__(self, rng: Random | None = None) -> None:
         self._rng = rng or Random()  # noqa: S311
-        # Track whether the default sleeper is in use so execute() can switch to
-        # cancel.wait() for interruptible backoff in production. A custom sleeper
-        # (e.g. a no-op in tests) is called directly and cancel is checked afterward.
-        self._custom_sleeper = sleeper is not None
-        self._sleeper = sleeper or (lambda ms: time.sleep(ms / 1000.0))
 
     def execute(
         self,
@@ -74,10 +65,10 @@ class RetryStrategy:
     def _backoff(self, delay_ms: float, cancel: threading.Event | None) -> float:
         jitter = delay_ms * self._rng.random() * _MAX_JITTER_FACTOR
         sleep_ms = delay_ms + jitter
-        if cancel is not None and not self._custom_sleeper:
+        if cancel is not None:
             cancel.wait(sleep_ms / 1000.0)
         else:
-            self._sleeper(sleep_ms)
+            time.sleep(sleep_ms / 1000.0)
         return delay_ms * _MULTIPLIER
 
 

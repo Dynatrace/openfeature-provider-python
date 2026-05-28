@@ -1,4 +1,5 @@
 from random import Random
+from unittest.mock import patch
 
 import pytest
 
@@ -8,13 +9,11 @@ from dynatrace.openfeature._retry import (
     default_should_retry_status,
 )
 
-
-def _no_sleep(_ms: float) -> None:
-    pass
+_SLEEP = "dynatrace.openfeature._retry.time.sleep"
 
 
 def _seeded_retry() -> RetryStrategy:
-    return RetryStrategy(rng=Random(42), sleeper=_no_sleep)  # noqa: S311
+    return RetryStrategy(rng=Random(42))  # noqa: S311
 
 
 class TestDefaultShouldRetryStatus:
@@ -40,7 +39,8 @@ class TestRetryStrategyExecute:
         assert result == 200
         assert calls == 1
 
-    def test_retries_on_5xx_then_succeeds(self) -> None:
+    @patch(_SLEEP)
+    def test_retries_on_5xx_then_succeeds(self, _mock_sleep: object) -> None:
         responses = [500, 500, 200]
         idx = 0
 
@@ -54,14 +54,16 @@ class TestRetryStrategyExecute:
         assert result == 200
         assert idx == 3
 
-    def test_exhausts_attempts_returns_last_result(self) -> None:
+    @patch(_SLEEP)
+    def test_exhausts_attempts_returns_last_result(self, _mock_sleep: object) -> None:
         def fn() -> int:
             return 503
 
         result = _seeded_retry().execute(fn, should_retry=default_should_retry_status)
         assert result == 503
 
-    def test_retries_on_exception_then_succeeds(self) -> None:
+    @patch(_SLEEP)
+    def test_retries_on_exception_then_succeeds(self, _mock_sleep: object) -> None:
         calls = 0
 
         def fn() -> int:
@@ -79,7 +81,10 @@ class TestRetryStrategyExecute:
         assert result == 200
         assert calls == 3
 
-    def test_exhausts_all_attempts_raises_last_exception(self) -> None:
+    @patch(_SLEEP)
+    def test_exhausts_all_attempts_raises_last_exception(
+        self, _mock_sleep: object
+    ) -> None:
         def fn() -> int:
             raise OSError("always fails")
 
@@ -117,8 +122,8 @@ class TestRetryStrategyExecute:
         assert result == 429
         assert calls == 1
 
-    def test_sleep_called_between_attempts(self) -> None:
-        sleep_calls: list[float] = []
+    @patch(_SLEEP)
+    def test_sleep_called_between_attempts(self, mock_sleep: object) -> None:
         attempts = 0
 
         def fn() -> int:
@@ -126,10 +131,11 @@ class TestRetryStrategyExecute:
             attempts += 1
             return 500
 
-        RetryStrategy(rng=Random(0), sleeper=sleep_calls.append).execute(  # noqa: S311
+        RetryStrategy(rng=Random(0)).execute(  # noqa: S311
             fn, should_retry=default_should_retry_status
         )
-        assert len(sleep_calls) == _MAX_ATTEMPTS - 1
-        # Delays grow exponentially: first delay is ~100ms
-        assert sleep_calls[0] >= 100.0
-        assert sleep_calls[1] > sleep_calls[0]
+        assert mock_sleep.call_count == _MAX_ATTEMPTS - 1  # type: ignore[attr-defined]
+        sleep_args = [call.args[0] for call in mock_sleep.call_args_list]  # type: ignore[attr-defined]
+        # delays are in seconds; first is ~100ms base + jitter
+        assert sleep_args[0] >= 0.1
+        assert sleep_args[1] > sleep_args[0]
