@@ -65,7 +65,7 @@ class CdnFetcher:
         self._clock: Callable[[], float] = clock or time.time
         self._cache = _CacheState()
         self._rate_limited_until: float = 0.0
-        self._fetch_lock = threading.Lock()
+        self._fetch_lock = threading.RLock()
 
     def is_rate_limited(self, now: float | None = None) -> bool:
         t = now if now is not None else self._clock()
