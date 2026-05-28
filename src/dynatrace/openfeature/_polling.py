@@ -126,5 +126,5 @@ class PollingManager:
             if cancel.is_set():
                 log.debug("poll cancelled")
                 return
-            log.warning("poll failed", exc_info=exc)
+            log.warning("poll failed: %s", type(exc).__name__)
             self._emit_failure(type(exc).__name__)
