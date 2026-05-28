@@ -163,5 +163,5 @@ def _parse_retry_after_ms(retry_after: str | None, now: float) -> float:
         dt = parsedate_to_datetime(retry_after.strip())
         return max((dt.timestamp() - now) * 1000.0, 0.0)
     except Exception:
-        log.debug("unparseable Retry-After %r; using default", retry_after)
+        log.warning("unparseable Retry-After %r; using default", retry_after)
     return _DEFAULT_RETRY_AFTER_MS
