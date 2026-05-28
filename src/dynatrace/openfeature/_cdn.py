@@ -25,10 +25,7 @@ class FetchResult:
     body: str | None
     etag: str | None
     last_modified: str | None
-
-    @property
-    def is_skipped(self) -> bool:
-        return self.status == -1
+    skipped: bool = False
 
     @property
     def is_not_modified(self) -> bool:
@@ -80,7 +77,7 @@ class CdnFetcher:
             return FetchResult(429, None, None, None)
         if not self._fetch_lock.acquire(blocking=False):
             log.debug("fetch already in progress; skipping")
-            return FetchResult(-1, None, None, None)
+            return FetchResult(0, None, None, None, skipped=True)
         try:
             return self._retry.execute(
                 self._do_fetch,

@@ -93,7 +93,7 @@ class PollingManager:
                 log.debug("poll cancelled after fetch returned; discarding result")
                 return
 
-            if result.is_skipped:
+            if result.skipped:
                 log.debug("fetch skipped (lock contention); retaining cached state")
                 return
 
