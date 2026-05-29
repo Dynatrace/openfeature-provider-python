@@ -19,7 +19,10 @@ def _make_pm(
     interval_s: float = _FAST_INTERVAL,
 ) -> tuple[PollingManager, dict[str, list[object]]]:
     calls: dict[str, list[object]] = {
-        "store": [], "change": [], "success": [], "failure": []
+        "store": [],
+        "change": [],
+        "success": [],
+        "failure": [],
     }
     if fetch_fn is None:
         fetch_fn = lambda cancel=None: fetch_result  # noqa: E731
@@ -163,7 +166,9 @@ class TestPollingManagerThreading:
             call_count[0] += 1
             if call_count[0] == 1:
                 started.set()
-                (cancel or threading.Event()).wait(10)  # blocks until cancelled or timeout
+                (cancel or threading.Event()).wait(
+                    10
+                )  # blocks until cancelled or timeout
             else:
                 second_started.set()
             return _304
@@ -178,7 +183,9 @@ class TestPollingManagerThreading:
         )
         pm.start()
         assert started.wait(timeout=1.0), "first poll should start"
-        assert second_started.wait(timeout=1.0), "second poll should start without waiting for first"
+        assert second_started.wait(timeout=1.0), (
+            "second poll should start without waiting for first"
+        )
         pm.stop()
 
     def test_cancelled_poll_does_not_emit_failure(self) -> None:
