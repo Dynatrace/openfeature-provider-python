@@ -11,9 +11,9 @@ from dynatrace.openfeature import DynatraceProvider
 from dynatrace.openfeature._cdn import CdnFetcher
 from dynatrace.openfeature.options import DynatraceProviderOptions
 
-_KEY = 'dt01.server_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5'
-_CDN_URL = 'https://cdn.us.fm.dynatrace.com/server/' + _KEY + '.json'
-_FIXTURE = Path(__file__).parent / 'fixtures' / 'flag-config.json'
+_KEY = "dt01.server_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5"
+_CDN_URL = "https://cdn.us.fm.dynatrace.com/server/" + _KEY + ".json"
+_FIXTURE = Path(__file__).parent / "fixtures" / "flag-config.json"
 
 
 def _fast_fetcher(key: str = _KEY) -> CdnFetcher:
@@ -45,14 +45,14 @@ class TestInitialize:
     def test_init_failure_on_404_raises(self) -> None:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=404)
         p = _make_provider()
-        with pytest.raises(GeneralError, match='HTTP 404'):
+        with pytest.raises(GeneralError, match="HTTP 404"):
             p.initialize()
 
     @rsps_lib.activate
     def test_init_failure_on_empty_body_raises(self) -> None:
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, body='', status=200)
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body="", status=200)
         p = _make_provider()
-        with pytest.raises(GeneralError, match='empty'):
+        with pytest.raises(GeneralError, match="empty"):
             p.initialize()
 
 
@@ -69,33 +69,33 @@ class TestEvaluation:
         rsps_lib.reset()
 
     def test_boolean_evaluation(self) -> None:
-        result = self._provider.resolve_boolean_details('my-bool-flag', False)
+        result = self._provider.resolve_boolean_details("my-bool-flag", False)
         assert result.value is True
 
     def test_string_evaluation(self) -> None:
-        result = self._provider.resolve_string_details('my-string-flag', 'default')
-        assert result.value == 'world'
+        result = self._provider.resolve_string_details("my-string-flag", "default")
+        assert result.value == "world"
 
     def test_integer_evaluation(self) -> None:
-        result = self._provider.resolve_integer_details('my-int-flag', 0)
+        result = self._provider.resolve_integer_details("my-int-flag", 0)
         assert result.value == 42
 
     def test_float_evaluation(self) -> None:
-        result = self._provider.resolve_float_details('my-float-flag', 0.0)
+        result = self._provider.resolve_float_details("my-float-flag", 0.0)
         assert abs(result.value - 3.14) < 0.001
 
     def test_object_evaluation(self) -> None:
-        result = self._provider.resolve_object_details('my-obj-flag', {})
-        assert result.value == {'key': 'value'}
+        result = self._provider.resolve_object_details("my-obj-flag", {})
+        assert result.value == {"key": "value"}
 
     def test_unknown_flag_raises_not_found(self) -> None:
         with pytest.raises(FlagNotFoundError):
-            self._provider.resolve_boolean_details('no-such-flag', False)
+            self._provider.resolve_boolean_details("no-such-flag", False)
 
     def test_flag_not_found_before_init(self) -> None:
         p = DynatraceProvider(_KEY, fetcher=_fast_fetcher())
         with pytest.raises(FlagNotFoundError):
-            p.resolve_boolean_details('my-bool-flag', False)
+            p.resolve_boolean_details("my-bool-flag", False)
 
 
 class TestStateMachine:
@@ -113,6 +113,7 @@ class TestStateMachine:
         def on_stale(details: object) -> None:
             original(details)  # type: ignore[arg-type]
             stale_event.set()
+
         p.emit_provider_stale = on_stale  # type: ignore[method-assign]
         # 5x 500 exhausts the retry budget before the next tick cancels the poll
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
@@ -120,7 +121,7 @@ class TestStateMachine:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
-        assert stale_event.wait(timeout=5.0), 'never transitioned to STALE'
+        assert stale_event.wait(timeout=5.0), "never transitioned to STALE"
         assert p._state == ProviderStatus.STALE
         p.shutdown()
 
@@ -132,15 +133,17 @@ class TestStateMachine:
         # force to STALE
         ready_event = threading.Event()
         original = p.emit_provider_ready
+
         def on_ready(details: object) -> None:
             original(details)  # type: ignore[arg-type]
             ready_event.set()
+
         p.emit_provider_ready = on_ready  # type: ignore[method-assign]
-        with p._state_lock:
+        with p._lock:
             p._state = ProviderStatus.STALE
         # next poll succeeds
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=304)
-        assert ready_event.wait(timeout=3.0), 'never recovered to READY'
+        assert ready_event.wait(timeout=3.0), "never recovered to READY"
         assert p._state == ProviderStatus.READY
         p.shutdown()
 
@@ -151,14 +154,16 @@ class TestStateMachine:
         p.initialize()
         error_event = threading.Event()
         original = p.emit_provider_error
+
         def on_error(details: object) -> None:
             original(details)  # type: ignore[arg-type]
             error_event.set()
+
         p.emit_provider_error = on_error  # type: ignore[method-assign]
-        with p._state_lock:
+        with p._lock:
             p._state = ProviderStatus.STALE
             p._start_grace_timer()
-        assert error_event.wait(timeout=2.0), 'never transitioned to ERROR'
+        assert error_event.wait(timeout=2.0), "never transitioned to ERROR"
         assert p._state == ProviderStatus.ERROR
         p.shutdown()
 
@@ -169,17 +174,21 @@ class TestStateMachine:
         p.initialize()
         changed_event = threading.Event()
         original = p.emit_provider_configuration_changed
+
         def on_changed(details: object) -> None:
             original(details)  # type: ignore[arg-type]
             changed_event.set()
+
         p.emit_provider_configuration_changed = on_changed  # type: ignore[method-assign]
         # return config with a new flag
         new_config = json.loads(_FIXTURE.read_text())
-        new_config['flags']['new-flag'] = {
-            'state': 'ENABLED', 'defaultVariant': 'v', 'variants': {'v': True}
+        new_config["flags"]["new-flag"] = {
+            "state": "ENABLED",
+            "defaultVariant": "v",
+            "variants": {"v": True},
         }
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=json.dumps(new_config), status=200)
-        assert changed_event.wait(timeout=3.0), 'config_changed never fired'
+        assert changed_event.wait(timeout=3.0), "config_changed never fired"
         p.shutdown()
 
 
