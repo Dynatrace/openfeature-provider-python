@@ -8,7 +8,7 @@ from openfeature.exception import FlagNotFoundError, GeneralError
 from openfeature.provider import ProviderStatus
 
 from dynatrace.openfeature import DynatraceProvider
-from dynatrace.openfeature._cdn import CdnFetcher
+from dynatrace.openfeature._cdn import CdnFetcher, FetchResult
 from dynatrace.openfeature.options import DynatraceProviderOptions
 
 _KEY = "dt01.server_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5"
@@ -201,3 +201,39 @@ class TestShutdown:
         p.shutdown()
         p.shutdown()  # second call must not raise
         assert p._state == ProviderStatus.NOT_READY
+
+
+class _BlockingFetcher:
+    """Fetcher whose fetch() blocks until released, to exercise the
+    initialize()/shutdown() race."""
+
+    def __init__(self, body: str) -> None:
+        self._body = body
+        self.fetch_started = threading.Event()
+        self.release = threading.Event()
+
+    def fetch(self, cancel: threading.Event | None = None) -> FetchResult:
+        self.fetch_started.set()
+        self.release.wait(timeout=5.0)
+        return FetchResult(200, self._body, None, None)
+
+
+class TestInitShutdownRace:
+    def test_shutdown_during_initialize_is_not_overwritten(self) -> None:
+        fetcher = _BlockingFetcher(_FIXTURE.read_text())
+        p = DynatraceProvider(_KEY, fetcher=fetcher, poll_interval_s=600.0)
+
+        init_thread = threading.Thread(target=p.initialize)
+        init_thread.start()
+
+        # shutdown() lands while initialize()'s fetch is still in flight.
+        assert fetcher.fetch_started.wait(timeout=5.0)
+        p.shutdown()
+        # let the in-flight fetch return and attempt to commit READY.
+        fetcher.release.set()
+        init_thread.join(timeout=5.0)
+
+        assert not init_thread.is_alive()
+        # the shutdown must win: no poller resurrected, state stays NOT_READY.
+        assert p._state == ProviderStatus.NOT_READY
+        assert p._poller is None

@@ -54,6 +54,12 @@ class DynatraceProvider(AbstractProvider):
         self._grace_timer: threading.Timer | None = None
         self._state = ProviderStatus.NOT_READY
         self._lock = threading.RLock()
+        # Bumped under _lock on every initialize()/shutdown(). An in-flight
+        # initialize() captures this value before its (lock-free) fetch and only
+        # commits its READY state + poller if the value is unchanged afterwards,
+        # so a concurrent shutdown() or re-initialize() can never be overwritten
+        # by a slow fetch finishing late.
+        self._generation = 0
 
     def get_metadata(self) -> Metadata:
         return Metadata(name=_PROVIDER_NAME)
@@ -63,6 +69,10 @@ class DynatraceProvider(AbstractProvider):
 
     def initialize(self, evaluation_context: EvaluationContext | None = None) -> None:
         log.info("initializing Dynatrace provider (key=%s)", self._options.public_key)
+        with self._lock:
+            self._generation += 1
+            generation = self._generation
+
         try:
             result = self._fetcher.fetch()
         except (OSError, requests.RequestException) as exc:
@@ -83,6 +93,14 @@ class DynatraceProvider(AbstractProvider):
             raise GeneralError(f"initial CDN config is invalid: {exc}") from exc
 
         with self._lock:
+            if self._generation != generation:
+                # A concurrent shutdown() or re-initialize() superseded us while
+                # the fetch was in flight; do not resurrect the provider.
+                log.info(
+                    "initialize superseded by a concurrent shutdown/initialize; "
+                    "not starting poller"
+                )
+                return
             self._cancel_grace_timer()
             if self._poller is not None:
                 self._poller.stop()
@@ -100,7 +118,10 @@ class DynatraceProvider(AbstractProvider):
 
     def shutdown(self) -> None:
         with self._lock:
-            if self._state == ProviderStatus.NOT_READY:
+            # Always bump the generation, even when already idle, so an
+            # in-flight initialize() detects it was superseded and aborts.
+            self._generation += 1
+            if self._state == ProviderStatus.NOT_READY and self._poller is None:
                 return
             log.info("shutting down Dynatrace provider")
             self._state = ProviderStatus.NOT_READY
