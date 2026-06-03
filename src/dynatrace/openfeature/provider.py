@@ -54,11 +54,7 @@ class DynatraceProvider(AbstractProvider):
         self._grace_timer: threading.Timer | None = None
         self._state = ProviderStatus.NOT_READY
         self._lock = threading.RLock()
-        # Bumped under _lock on every initialize()/shutdown(). An in-flight
-        # initialize() captures this value before its (lock-free) fetch and only
-        # commits its READY state + poller if the value is unchanged afterwards,
-        # so a concurrent shutdown() or re-initialize() can never be overwritten
-        # by a slow fetch finishing late.
+        # bumped by initialize/shutdown so a slow init can detect it was superseded
         self._generation = 0
 
     def get_metadata(self) -> Metadata:
