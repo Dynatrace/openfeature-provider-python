@@ -43,8 +43,8 @@ jobs:
     # uses the raw commit message instead of the PR title, bypassing our
     # PR title lint. this job catches that case.
     # needed until resolved by the ASDY team: https://dynatrace.slack.com/archives/C044FDZRG0J/p1776431066203749
-    lint-single-commit:
-        name: Validate single-commit message
+    lint-commit-message:
+        name: Validate commit message
         runs-on: ubuntu-latest
         permissions:
             pull-requests: read
