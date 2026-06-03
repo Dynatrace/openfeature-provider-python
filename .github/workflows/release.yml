@@ -34,11 +34,10 @@ jobs:
         environment: publish
         permissions:
             contents: read
-            id-token: write
-        if: ${{ needs.release-please.outputs.release_created == 'true' }}
+        if: ${{ fromJSON(needs.release-please.outputs.release_created || false) }}
 
         steps:
-            - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+            - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
             - uses: astral-sh/setup-uv@22695119d769bdb6f7032ad67b9bca0ef8c4a174 # v5.4.0
               with:
@@ -48,4 +47,5 @@ jobs:
 
             - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe3ffbf9c993bff2 # v1.12.4
               with:
-                  attestations: true
+                  password: ${{ secrets.PYPI_PUBLISH_TOKEN }}
+                  attestations: false # this can be made true once our repo is public
