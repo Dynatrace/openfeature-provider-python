@@ -58,7 +58,9 @@ class TestPayload:
                 ): 1
             },
         }
-        payload = json.loads(build_payload(evaluations, "1741780800", "1.2.3", "dynatrace"))
+        payload = json.loads(
+            build_payload(evaluations, "1741780800", "1.2.3", "dynatrace")
+        )
         assert payload["version"] == "1741780800"
         assert payload["sdkType"] == "server"
         assert payload["sdkVersion"] == "1.2.3"
@@ -89,7 +91,9 @@ class TestDelivery:
         assert body["version"] == "v1"
         assert body["evaluations"][0]["flagKey"] == "flag-a"
         # Authorization header carries the bearer token.
-        assert rsps_lib.calls[0].request.headers["Authorization"] == "Bearer my-secret-key"
+        assert (
+            rsps_lib.calls[0].request.headers["Authorization"] == "Bearer my-secret-key"
+        )
 
     @rsps_lib.activate
     def test_empty_aggregator_does_not_post(self) -> None:

@@ -107,7 +107,9 @@ class TestEndToEnd:
     @rsps_lib.activate
     def test_evaluation_through_client_records_metrics(self) -> None:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_V1, status=200)
-        provider = _provider()  # real flusher, but interval is long so it won't auto-fire
+        provider = (
+            _provider()
+        )  # real flusher, but interval is long so it won't auto-fire
         api.set_provider(provider)
         provider.initialize()
         try:

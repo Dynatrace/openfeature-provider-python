@@ -8,7 +8,9 @@ from dynatrace.openfeature._metrics_aggregator import (
 )
 
 
-def _agg(version: str | None = "v1", max_distinct: int = 2000) -> DynatraceMetricsAggregator:
+def _agg(
+    version: str | None = "v1", max_distinct: int = 2000
+) -> DynatraceMetricsAggregator:
     agg = DynatraceMetricsAggregator(max_distinct)
     if version is not None:
         agg.set_version(version)

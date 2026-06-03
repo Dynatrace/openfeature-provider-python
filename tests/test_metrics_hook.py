@@ -83,7 +83,9 @@ class TestNormalization:
         agg = _aggregator()
         _record(
             agg,
-            _details(variant=None, reason=Reason.ERROR, error_code=ErrorCode.FLAG_NOT_FOUND),
+            _details(
+                variant=None, reason=Reason.ERROR, error_code=ErrorCode.FLAG_NOT_FOUND
+            ),
         )
         assert _single_key(agg) == EvaluationMetricKey(
             "__default__", "error", "flag_not_found", _BUCKET
