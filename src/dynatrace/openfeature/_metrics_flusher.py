@@ -85,6 +85,8 @@ class EvaluationMetricsFlusher:
         self._sdk_version = sdk_version
         self._provider_name = provider_name
         self._session = session or requests.Session()
+        # Only close the session we created ourselves; never an injected one.
+        self._owns_session = session is None
         self._clock = clock
 
         self._started = False
@@ -160,6 +162,12 @@ class EvaluationMetricsFlusher:
             thread.join(timeout=_HTTP_TIMEOUT_S + 2.0)
         # Final synchronous flush of anything still queued/accumulated.
         self._flush_quietly()
+        # Release the connection pool we own once no more requests will be made.
+        if self._owns_session:
+            try:
+                self._session.close()
+            except Exception as exc:
+                log.debug("metrics flusher session close failed: %r", exc)
 
     def _run(self) -> None:
         while not self._stop_event.is_set():

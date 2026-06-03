@@ -119,6 +119,7 @@ class TestEndToEnd:
             batch = provider._metrics_aggregator.drain()
             assert "my-bool-flag" in batch.evaluations
         finally:
+            provider.shutdown()
             api.clear_providers()
 
 

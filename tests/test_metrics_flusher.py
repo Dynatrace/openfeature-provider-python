@@ -267,3 +267,23 @@ class TestLifecycle:
         flusher.start()
         assert flusher._thread is first
         flusher.shutdown()
+
+    def test_shutdown_closes_owned_session(self) -> None:
+        flusher = _flusher(_agg())  # no session injected -> flusher owns one
+        closed: list[bool] = []
+        flusher._session.close = lambda: closed.append(True)  # type: ignore[method-assign]
+        flusher.start()
+        flusher.shutdown()
+        assert closed == [True]
+
+    def test_shutdown_does_not_close_injected_session(self) -> None:
+        closed: list[bool] = []
+
+        class TrackingSession:
+            def close(self) -> None:
+                closed.append(True)
+
+        flusher = _flusher(_agg(), session=TrackingSession())  # type: ignore[arg-type]
+        flusher.start()
+        flusher.shutdown()
+        assert closed == []
