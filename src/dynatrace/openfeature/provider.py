@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Mapping, Sequence
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _pkg_version
 
 import requests
 
@@ -16,6 +18,13 @@ from openfeature.provider import AbstractProvider, Metadata, ProviderStatus
 
 from ._cdn import REQUEST_TIMEOUT_S as _REQUEST_TIMEOUT_S
 from ._cdn import CdnFetcher
+from ._metrics_aggregator import (
+    HARD_CAP_DISTINCT_FLAGS,
+    SOFT_CAP_DISTINCT_FLAGS,
+    DynatraceMetricsAggregator,
+)
+from ._metrics_flusher import EvaluationMetricsFlusher
+from ._metrics_hook import DynatraceMetricsHook
 from ._polling import PollingManager
 from .options import DynatraceProviderOptions
 
@@ -24,21 +33,33 @@ log = logging.getLogger(__name__)
 _PROVIDER_NAME = "dynatrace"
 _POLL_INTERVAL_S: float = 10.0
 _GRACE_PERIOD_S: float = 60.0
+_METRICS_FLUSH_INTERVAL_S: float = 30.0
+_VERSION_METADATA_KEY = "version"
+
+
+def _resolve_sdk_version() -> str:
+    try:
+        return _pkg_version("dynatrace-openfeature-provider-python")
+    except PackageNotFoundError:
+        return "0.0.0"
 
 
 class DynatraceProvider(AbstractProvider):
-    def __init__(
+    def __init__(  # noqa: PLR0913 - public constructor with optional injectable seams
         self,
         sdk_key: str,
         *,
         cdn_base_url: str | None = None,
+        metrics_url: str | None = None,
         flagd_core: FlagdCore | None = None,
         fetcher: CdnFetcher | None = None,
+        metrics_flusher: EvaluationMetricsFlusher | None = None,
         poll_interval_s: float = _POLL_INTERVAL_S,
         grace_period_s: float = _GRACE_PERIOD_S,
+        metrics_flush_interval_s: float = _METRICS_FLUSH_INTERVAL_S,
     ) -> None:
         options = DynatraceProviderOptions.from_sdk_key(
-            sdk_key, cdn_base_url=cdn_base_url
+            sdk_key, cdn_base_url=cdn_base_url, metrics_url=metrics_url
         )
         if fetcher is None and poll_interval_s <= _REQUEST_TIMEOUT_S:
             raise ValueError(
@@ -57,11 +78,25 @@ class DynatraceProvider(AbstractProvider):
         # bumped by initialize/shutdown so a slow init can detect it was superseded
         self._generation = 0
 
+        self._metrics_aggregator = DynatraceMetricsAggregator(HARD_CAP_DISTINCT_FLAGS)
+        self._metrics_flusher = metrics_flusher or EvaluationMetricsFlusher(
+            self._metrics_aggregator,
+            sdk_key=sdk_key.strip(),
+            metrics_url=options.metrics_url,
+            flush_interval_s=metrics_flush_interval_s,
+            capacity_threshold=SOFT_CAP_DISTINCT_FLAGS,
+            sdk_version=_resolve_sdk_version(),
+            provider_name=_PROVIDER_NAME,
+        )
+        self._metrics_hook = DynatraceMetricsHook(
+            self._metrics_aggregator, on_record=self._metrics_flusher.on_record
+        )
+
     def get_metadata(self) -> Metadata:
         return Metadata(name=_PROVIDER_NAME)
 
     def get_provider_hooks(self) -> list[Hook]:
-        return []
+        return [self._metrics_hook]
 
     def initialize(self, evaluation_context: EvaluationContext | None = None) -> None:
         log.info("initializing Dynatrace provider (key=%s)", self._options.public_key)
@@ -88,6 +123,10 @@ class DynatraceProvider(AbstractProvider):
         except ParseError as exc:
             raise GeneralError(f"initial CDN config is invalid: {exc}") from exc
 
+        # Set the aggregator version eagerly so it is authoritative before any
+        # evaluation is recorded.
+        self._update_metrics_version_from_flag_set()
+
         with self._lock:
             if self._generation != generation:
                 # A concurrent shutdown() or re-initialize() superseded us while
@@ -110,6 +149,7 @@ class DynatraceProvider(AbstractProvider):
                 interval_s=self._poll_interval_s,
             )
             self._poller.start()
+        self._metrics_flusher.start()
         log.info("Dynatrace provider initialized successfully")
 
     def shutdown(self) -> None:
@@ -125,6 +165,10 @@ class DynatraceProvider(AbstractProvider):
             if self._poller is not None:
                 self._poller.stop()
                 self._poller = None
+        try:
+            self._metrics_flusher.shutdown()
+        except Exception as exc:
+            log.warning("metrics flusher shutdown failed: %r", exc)
         super().shutdown()
         log.info("Dynatrace provider shut down")
 
@@ -179,7 +223,20 @@ class DynatraceProvider(AbstractProvider):
         )
 
     def _store_flags(self, body: str) -> list[str]:
-        return self._flagd_core.set_flags_and_get_changed_keys(body)
+        # Seal the old-version batch and enqueue/trigger its flush BEFORE applying
+        # the new config and bumping the version, so pre-rotation counts are
+        # flushed under the old version.
+        sealed = self._metrics_aggregator.drain()
+        self._metrics_flusher.enqueue_sealed_batch(sealed)
+        self._metrics_flusher.trigger_flush()
+        changed = self._flagd_core.set_flags_and_get_changed_keys(body)
+        self._update_metrics_version_from_flag_set()
+        return changed
+
+    def _update_metrics_version_from_flag_set(self) -> None:
+        version = self._flagd_core.get_flag_set_metadata().get(_VERSION_METADATA_KEY)
+        if isinstance(version, str) and version.strip():
+            self._metrics_aggregator.set_version(version)
 
     def _on_fetch_success(self) -> None:
         with self._lock:

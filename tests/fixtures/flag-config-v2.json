@@ -1,0 +1,15 @@
+{
+  "metadata": {
+    "version": "1741780900"
+  },
+  "flags": {
+    "my-bool-flag": {
+      "state": "ENABLED",
+      "defaultVariant": "off",
+      "variants": {
+        "on": true,
+        "off": false
+      }
+    }
+  }
+}
