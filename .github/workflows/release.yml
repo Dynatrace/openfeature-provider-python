@@ -45,7 +45,7 @@ jobs:
 
             - run: uv build
 
-            - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe3ffbf9c993bff2 # v1.12.4
+            - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
               with:
                   password: ${{ secrets.PYPI_PUBLISH_TOKEN }}
                   attestations: false # this can be made true once our repo is public
