@@ -4,7 +4,7 @@ build-backend = "uv_build"
 
 [project]
 name = "dynatrace-openfeature-provider-python"
-version = "0.0.2"
+version = "0.0.3"
 description = "The official Dynatrace OpenFeature provider for Python"
 readme = "README.md"
 authors = [{ name = "Dynatrace" }]
