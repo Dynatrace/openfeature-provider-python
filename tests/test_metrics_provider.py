@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import responses as rsps_lib
 from openfeature import api
 
@@ -121,6 +122,16 @@ class TestEndToEnd:
         finally:
             provider.shutdown()
             api.clear_providers()
+
+
+class TestConstructor:
+    def test_non_positive_metrics_flush_interval_raises(self) -> None:
+        with pytest.raises(ValueError, match="metrics_flush_interval_s"):
+            DynatraceProvider(_KEY, metrics_flush_interval_s=0)
+
+    def test_negative_metrics_flush_interval_raises(self) -> None:
+        with pytest.raises(ValueError, match="metrics_flush_interval_s"):
+            DynatraceProvider(_KEY, metrics_flush_interval_s=-1.0)
 
 
 class TestOptions:

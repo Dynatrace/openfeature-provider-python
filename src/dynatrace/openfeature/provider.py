@@ -66,6 +66,10 @@ class DynatraceProvider(AbstractProvider):
                 f"poll_interval_s ({poll_interval_s}s) must be greater than the "
                 f"request timeout ({_REQUEST_TIMEOUT_S}s)"
             )
+        if metrics_flush_interval_s <= 0:
+            raise ValueError(
+                f"metrics_flush_interval_s ({metrics_flush_interval_s}s) must be positive"
+            )
         self._options = options
         self._flagd_core = flagd_core or FlagdCore()
         self._fetcher = fetcher or CdnFetcher(options)
