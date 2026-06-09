@@ -10,17 +10,19 @@ _KEY_PATTERN = re.compile(
 
 
 class DynatraceProviderOptions:
-    __slots__ = ("_cdn_url", "_key")
+    __slots__ = ("_cdn_url", "_key", "_metrics_url")
 
-    def __init__(self, key: str, cdn_url: str) -> None:
+    def __init__(self, key: str, cdn_url: str, metrics_url: str) -> None:
         self._key = key
         self._cdn_url = cdn_url
+        self._metrics_url = metrics_url
 
     @classmethod
     def from_sdk_key(
         cls,
         sdk_key: str,
         cdn_base_url: str | None = None,
+        metrics_url: str | None = None,
     ) -> DynatraceProviderOptions:
         if not sdk_key or not sdk_key.strip():
             raise ValueError("sdk_key must not be null or blank")
@@ -42,7 +44,14 @@ class DynatraceProviderOptions:
         else:
             base = f"https://cdn.{geo}.fm.dynatrace.com/server/"
         cdn_url = base + trimmed + ".json"
-        return cls(key=trimmed, cdn_url=cdn_url)
+        if metrics_url is not None:
+            metrics_url = metrics_url.strip()
+            if not metrics_url:
+                raise ValueError("metrics_url must not be blank")
+            resolved_metrics_url = metrics_url
+        else:
+            resolved_metrics_url = f"https://metrics.{geo}.fm.dynatrace.com/v1/metrics"
+        return cls(key=trimmed, cdn_url=cdn_url, metrics_url=resolved_metrics_url)
 
     @property
     def public_key(self) -> str:
@@ -53,3 +62,7 @@ class DynatraceProviderOptions:
     @property
     def cdn_url(self) -> str:
         return self._cdn_url
+
+    @property
+    def metrics_url(self) -> str:
+        return self._metrics_url
