@@ -184,6 +184,22 @@ class TestFailureHandling:
         flusher._flush()
         assert flusher._next_out_of_band_flush_allowed == 100.0 + 30.0
 
+    def test_non_network_exception_sets_cooldown(self) -> None:
+        # A non-RequestException (here from the session) must still apply the
+        # cooldown so out-of-band flushes back off, not just network errors.
+        class BoomSession:
+            def post(self, *args: object, **kwargs: object) -> object:
+                raise ValueError("boom")
+
+        now = [100.0]
+        agg = _agg("v1")
+        agg.record("a", "v", "static", None, 10)
+        flusher = _flusher(agg, session=BoomSession(), clock=lambda: now[0])
+        flusher.enqueue_sealed_batch(agg.drain())
+        flusher._flush()
+        assert len(flusher._sealed) == 1
+        assert flusher._next_out_of_band_flush_allowed == 100.0 + 30.0
+
 
 class TestQueueCap:
     def test_max_sealed_batches_drops_incoming(self) -> None:

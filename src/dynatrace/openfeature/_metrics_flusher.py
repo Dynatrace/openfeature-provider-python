@@ -216,10 +216,13 @@ class EvaluationMetricsFlusher:
     def _flush_batch(self, batch: DrainedBatch) -> bool:
         """POSTs ``batch``. Returns True if delivered (or non-retryable and
         dropped); False if the caller should requeue it."""
-        body = build_payload(
-            batch.evaluations, batch.version, self._sdk_version, self._provider_name
-        )
         try:
+            body = build_payload(
+                batch.evaluations,
+                batch.version,
+                self._sdk_version,
+                self._provider_name,
+            )
             response = self._session.post(
                 self._metrics_url,
                 data=body,
@@ -229,8 +232,11 @@ class EvaluationMetricsFlusher:
                 },
                 timeout=_HTTP_TIMEOUT_S,
             )
-        except requests.RequestException as exc:
-            log.warning("evaluation metrics flush HTTP error: %r", exc)
+        except Exception as exc:
+            # Any failure (network, serialization, or an injected session's own
+            # errors) must apply the cooldown so out-of-band flushes back off,
+            # mirroring the Java flusher's catch-all behavior.
+            log.warning("evaluation metrics flush error: %r", exc)
             self._apply_failure_cooldown()
             return False
 
