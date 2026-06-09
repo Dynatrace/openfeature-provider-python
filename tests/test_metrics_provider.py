@@ -103,6 +103,15 @@ class TestWiring:
         p.shutdown()
         assert flusher.shutdown_called is True
 
+    def test_shutdown_without_initialize_still_shuts_down_flusher(self) -> None:
+        # The flusher owns a session created in __init__, so shutdown() must
+        # release it even when initialize() never ran (otherwise the early-idle
+        # return would leak it).
+        flusher = _FakeFlusher()
+        p = _provider(flusher)
+        p.shutdown()
+        assert flusher.shutdown_called is True
+
 
 class TestEndToEnd:
     @rsps_lib.activate

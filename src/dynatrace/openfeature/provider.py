@@ -161,18 +161,26 @@ class DynatraceProvider(AbstractProvider):
             # Always bump the generation, even when already idle, so an
             # in-flight initialize() detects it was superseded and aborts.
             self._generation += 1
-            if self._state == ProviderStatus.NOT_READY and self._poller is None:
-                return
-            log.info("shutting down Dynatrace provider")
-            self._state = ProviderStatus.NOT_READY
-            self._cancel_grace_timer()
-            if self._poller is not None:
-                self._poller.stop()
-                self._poller = None
+            already_idle = (
+                self._state == ProviderStatus.NOT_READY and self._poller is None
+            )
+            if not already_idle:
+                log.info("shutting down Dynatrace provider")
+                self._state = ProviderStatus.NOT_READY
+                self._cancel_grace_timer()
+                if self._poller is not None:
+                    self._poller.stop()
+                    self._poller = None
+        # Always release the flusher (and the session it owns), even when the
+        # provider never finished initializing: the flusher's session is created
+        # in __init__, so an early return here would otherwise leak it.
+        # flusher.shutdown() is idempotent and safe when never started.
         try:
             self._metrics_flusher.shutdown()
         except Exception as exc:
             log.warning("metrics flusher shutdown failed: %r", exc)
+        if already_idle:
+            return
         super().shutdown()
         log.info("Dynatrace provider shut down")
 
