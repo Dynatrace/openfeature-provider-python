@@ -2,7 +2,7 @@
 
 The official [Dynatrace](https://dynatrace.com) [OpenFeature](https://openfeature.dev) provider for Python server-side applications.
 
-> **Status:** Early alpha — not yet ready for production use.
+> **Status:** Early alpha — not yet ready for production use!
 
 ## Installation
 
