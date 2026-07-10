@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.4](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.0.3...v0.0.4) (2026-07-10)
+
+
+### 🐛 Bug Fixes
+
+* update readme ([7d97045](https://github.com/Dynatrace/openfeature-provider-python/commit/7d97045d3f102478d9ab35f26d3e35fae0165e04))
+
 ## [0.0.3](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.0.2...v0.0.3) (2026-06-09)
 
 
