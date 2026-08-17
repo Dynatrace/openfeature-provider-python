@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.1.0](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.0.4...v0.1.0) (2026-08-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* rename cdn_base_url to config_origin, accept origin-only value ([#14](https://github.com/Dynatrace/openfeature-provider-python/issues/14))
+
+### ✨ New Features
+
+* rename cdn_base_url to config_origin, accept origin-only value ([#14](https://github.com/Dynatrace/openfeature-provider-python/issues/14)) ([94e5e31](https://github.com/Dynatrace/openfeature-provider-python/commit/94e5e3146a5660e9cbb1d06aee8ffbeb665d2fb6))
+
 ## [0.0.4](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.0.3...v0.0.4) (2026-07-10)
 
 
