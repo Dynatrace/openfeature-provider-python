@@ -9,6 +9,42 @@ _KEY_PATTERN = re.compile(
     r"^(dt[0-9]{2})\.(server)_([a-z]{2,})_([a-zA-Z0-9]{10,})\.([a-fA-F0-9]{32,})_([a-f0-9]{10,})$"
 )
 
+_ALLOWED_SCHEMES = ("http", "https")
+
+
+def _normalise_config_origin(value: str) -> str:
+    """Validate that ``value`` is a bare origin and return it in canonical form.
+
+    An origin is a scheme, host, and optional port — nothing else. Anything the
+    platform and key segments could not be safely appended to is rejected here,
+    so a malformed override fails at construction rather than as a 404 on the
+    first config fetch.
+    """
+    try:
+        parsed = urlparse(value)
+    except ValueError as exc:
+        raise ValueError(f"config_origin is not a valid URL; got {value!r}") from exc
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(f"config_origin must use http or https; got {value!r}")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"config_origin has an invalid port; got {value!r}") from exc
+    if not parsed.hostname:
+        raise ValueError(f"config_origin must include a host; got {value!r}")
+    if parsed.path.rstrip("/"):
+        raise ValueError(f"config_origin must not include a path; got {value!r}")
+    if parsed.query:
+        raise ValueError(
+            f"config_origin must not include a query string; got {value!r}"
+        )
+    if parsed.fragment:
+        raise ValueError(f"config_origin must not include a fragment; got {value!r}")
+    if parsed.username or parsed.password:
+        raise ValueError(f"config_origin must not include user info; got {value!r}")
+    host = parsed.hostname if port is None else f"{parsed.hostname}:{port}"
+    return f"{parsed.scheme}://{host}"
+
 
 class DynatraceProviderOptions:
     __slots__ = ("_cdn_url", "_key", "_metrics_url")
@@ -41,13 +77,7 @@ class DynatraceProviderOptions:
             config_origin = config_origin.strip()
             if not config_origin:
                 raise ValueError("config_origin must not be blank")
-            parsed = urlparse(config_origin)
-            path = parsed.path.rstrip("/")
-            if path:
-                raise ValueError(
-                    f"config_origin must not include a path; got {config_origin!r}"
-                )
-            origin = config_origin.rstrip("/")
+            origin = _normalise_config_origin(config_origin)
             base = origin + "/" + platform + "/"
         else:
             base = f"https://cdn.{geo}.fm.dynatrace.com/{platform}/"

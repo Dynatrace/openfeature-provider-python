@@ -72,3 +72,25 @@ class TestFromSdkKey:
             DynatraceProviderOptions.from_sdk_key(
                 _VALID_KEY, config_origin="https://example.com/server/path"
             )
+
+    @pytest.mark.parametrize(
+        ("origin", "expected"),
+        [
+            ("https://example.com?tenant=x", "query string"),
+            ("https://example.com#frag", "fragment"),
+            ("https://user:pass@example.com", "user info"),
+            ("https://", "host"),
+            ("ftp://example.com", "http or https"),
+            ("example.com", "http or https"),
+            ("https://example.com:notaport", "invalid port"),
+        ],
+    )
+    def test_non_origin_config_origin_raises(self, origin: str, expected: str) -> None:
+        with pytest.raises(ValueError, match=expected):
+            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin=origin)
+
+    def test_config_origin_port_and_redundant_slashes_normalised(self) -> None:
+        opts = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY, config_origin="http://localhost:8080//"
+        )
+        assert opts.cdn_url.startswith("http://localhost:8080/server/")
