@@ -8,7 +8,14 @@
       "prerelease": true,
       "prerelease-type": "alpha",
       "bump-minor-pre-major": true,
-      "bump-patch-for-minor-pre-major": true
+      "bump-patch-for-minor-pre-major": true,
+      "extra-files": [
+        {
+          "type": "toml",
+          "path": "uv.lock",
+          "jsonpath": "$.package[?(@.name.value=='dynatrace-openfeature-provider-python')].version"
+        }
+      ]
     }
   },
   "changelog-sections": [
