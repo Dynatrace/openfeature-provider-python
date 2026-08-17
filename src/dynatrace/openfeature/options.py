@@ -1,12 +1,49 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 # SDK key format per providers.md §3.0:
 # {token}.server_{geo}_{publicRandom}.{secret}_{sha1}
 _KEY_PATTERN = re.compile(
     r"^(dt[0-9]{2})\.(server)_([a-z]{2,})_([a-zA-Z0-9]{10,})\.([a-fA-F0-9]{32,})_([a-f0-9]{10,})$"
 )
+
+_ALLOWED_SCHEMES = ("http", "https")
+
+
+def _normalise_config_origin(value: str) -> str:
+    """Validate that ``value`` is a bare origin and return it in canonical form.
+
+    An origin is a scheme, host, and optional port — nothing else. Anything the
+    platform and key segments could not be safely appended to is rejected here,
+    so a malformed override fails at construction rather than as a 404 on the
+    first config fetch.
+    """
+    try:
+        parsed = urlparse(value)
+    except ValueError as exc:
+        raise ValueError(f"config_origin is not a valid URL; got {value!r}") from exc
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise ValueError(f"config_origin must use http or https; got {value!r}")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"config_origin has an invalid port; got {value!r}") from exc
+    if not parsed.hostname:
+        raise ValueError(f"config_origin must include a host; got {value!r}")
+    if parsed.path.rstrip("/"):
+        raise ValueError(f"config_origin must not include a path; got {value!r}")
+    if parsed.query:
+        raise ValueError(
+            f"config_origin must not include a query string; got {value!r}"
+        )
+    if parsed.fragment:
+        raise ValueError(f"config_origin must not include a fragment; got {value!r}")
+    if parsed.username or parsed.password:
+        raise ValueError(f"config_origin must not include user info; got {value!r}")
+    host = parsed.hostname if port is None else f"{parsed.hostname}:{port}"
+    return f"{parsed.scheme}://{host}"
 
 
 class DynatraceProviderOptions:
@@ -21,7 +58,7 @@ class DynatraceProviderOptions:
     def from_sdk_key(
         cls,
         sdk_key: str,
-        cdn_base_url: str | None = None,
+        config_origin: str | None = None,
         metrics_url: str | None = None,
     ) -> DynatraceProviderOptions:
         if not sdk_key or not sdk_key.strip():
@@ -35,14 +72,15 @@ class DynatraceProviderOptions:
                 f"invalid key format (public: {public_part!r}); "
                 "expected dt{NN}.server_{geo}_{rand}.{secret}_{sha}"
             )
-        _token, _platform, geo, _rand, _secret, _sha = key_match.groups()
-        if cdn_base_url is not None:
-            cdn_base_url = cdn_base_url.strip()
-            if not cdn_base_url:
-                raise ValueError("cdn_base_url must not be blank")
-            base = cdn_base_url if cdn_base_url.endswith("/") else cdn_base_url + "/"
+        _token, platform, geo, _rand, _secret, _sha = key_match.groups()
+        if config_origin is not None:
+            config_origin = config_origin.strip()
+            if not config_origin:
+                raise ValueError("config_origin must not be blank")
+            origin = _normalise_config_origin(config_origin)
+            base = origin + "/" + platform + "/"
         else:
-            base = f"https://cdn.{geo}.fm.dynatrace.com/server/"
+            base = f"https://cdn.{geo}.fm.dynatrace.com/{platform}/"
         cdn_url = base + trimmed + ".json"
         if metrics_url is not None:
             metrics_url = metrics_url.strip()
