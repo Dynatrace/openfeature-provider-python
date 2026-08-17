@@ -31,10 +31,17 @@ enabled = client.get_boolean_value('my-feature', False, ctx)
 api.shutdown()
 ```
 
-### CDN base URL override (labs / dev environments)
+### Config origin override (labs / dev environments)
+
+By default the config endpoint is derived from the SDK key. To point the provider at a
+different environment or at an SDK proxy, pass `config_origin`. The value is an origin
+only — scheme, host, and optional port, with no path. The provider appends the platform
+and key segments itself.
 
 ```python
-options = DynatraceProviderOptions.from_sdk_key(sdk_key)
+api.set_provider(
+    DynatraceProvider(sdk_key, config_origin='https://cdn.eu.fm.dynatracelabs.com')
+)
 ```
 
 ## Architecture
