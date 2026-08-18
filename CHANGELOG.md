@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.1.0...v0.1.1) (2026-08-18)
+
+
+### 🐛 Bug Fixes
+
+* preserve IPv6 brackets when normalising config_origin ([#17](https://github.com/Dynatrace/openfeature-provider-python/issues/17)) ([49b0dec](https://github.com/Dynatrace/openfeature-provider-python/commit/49b0decf382c9fd2185e7ffe87e029a88e26d580))
+
 ## [0.1.0](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.0.4...v0.1.0) (2026-08-17)
 
 
