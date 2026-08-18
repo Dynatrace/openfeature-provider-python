@@ -89,8 +89,16 @@ class TestFromSdkKey:
         with pytest.raises(ValueError, match=expected):
             DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin=origin)
 
-    def test_config_origin_port_and_redundant_slashes_normalised(self) -> None:
-        opts = DynatraceProviderOptions.from_sdk_key(
-            _VALID_KEY, config_origin="http://localhost:8080//"
-        )
-        assert opts.cdn_url.startswith("http://localhost:8080/server/")
+    @pytest.mark.parametrize(
+        ("origin", "expected_base"),
+        [
+            ("http://localhost:8080//", "http://localhost:8080"),
+            ("HTTPS://Example.com", "https://example.com"),
+            # IPv6 literals must keep their brackets, or the URL is unusable.
+            ("http://[::1]:8080", "http://[::1]:8080"),
+            ("https://[2001:db8::1]", "https://[2001:db8::1]"),
+        ],
+    )
+    def test_config_origin_normalised(self, origin: str, expected_base: str) -> None:
+        opts = DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin=origin)
+        assert opts.cdn_url.startswith(expected_base + "/server/")

@@ -27,7 +27,8 @@ def _normalise_config_origin(value: str) -> str:
     if parsed.scheme not in _ALLOWED_SCHEMES:
         raise ValueError(f"config_origin must use http or https; got {value!r}")
     try:
-        port = parsed.port
+        # Accessing .port raises if the port is present but not a valid integer.
+        _ = parsed.port
     except ValueError as exc:
         raise ValueError(f"config_origin has an invalid port; got {value!r}") from exc
     if not parsed.hostname:
@@ -42,8 +43,10 @@ def _normalise_config_origin(value: str) -> str:
         raise ValueError(f"config_origin must not include a fragment; got {value!r}")
     if parsed.username or parsed.password:
         raise ValueError(f"config_origin must not include user info; got {value!r}")
-    host = parsed.hostname if port is None else f"{parsed.hostname}:{port}"
-    return f"{parsed.scheme}://{host}"
+    # netloc rather than hostname + port: it preserves the brackets around an IPv6
+    # literal, which hostname strips. User info is already rejected above, so at
+    # this point netloc is exactly the host and optional port.
+    return f"{parsed.scheme}://{parsed.netloc.lower()}"
 
 
 class DynatraceProviderOptions:
