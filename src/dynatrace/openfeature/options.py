@@ -10,39 +10,37 @@ _KEY_PATTERN = re.compile(
 )
 
 _ALLOWED_SCHEMES = ("http", "https")
+_METRICS_PATH = "/v1/metrics"
 
 
-def _normalise_config_origin(value: str) -> str:
+def _normalise_origin(value: str, field: str) -> str:
     """Validate that ``value`` is a bare origin and return it in canonical form.
 
-    An origin is a scheme, host, and optional port — nothing else. Anything the
-    platform and key segments could not be safely appended to is rejected here,
-    so a malformed override fails at construction rather than as a 404 on the
-    first config fetch.
+    An origin is a scheme, host, and optional port; nothing else. Anything that
+    could not be safely appended to is rejected here, so a malformed override
+    fails at construction rather than as a 404 on the first request.
     """
     try:
         parsed = urlparse(value)
     except ValueError as exc:
-        raise ValueError(f"config_origin is not a valid URL; got {value!r}") from exc
+        raise ValueError(f"{field} is not a valid URL; got {value!r}") from exc
     if parsed.scheme not in _ALLOWED_SCHEMES:
-        raise ValueError(f"config_origin must use http or https; got {value!r}")
+        raise ValueError(f"{field} must use http or https; got {value!r}")
     try:
         # Accessing .port raises if the port is present but not a valid integer.
         _ = parsed.port
     except ValueError as exc:
-        raise ValueError(f"config_origin has an invalid port; got {value!r}") from exc
+        raise ValueError(f"{field} has an invalid port; got {value!r}") from exc
     if not parsed.hostname:
-        raise ValueError(f"config_origin must include a host; got {value!r}")
+        raise ValueError(f"{field} must include a host; got {value!r}")
     if parsed.path.rstrip("/"):
-        raise ValueError(f"config_origin must not include a path; got {value!r}")
+        raise ValueError(f"{field} must not include a path; got {value!r}")
     if parsed.query:
-        raise ValueError(
-            f"config_origin must not include a query string; got {value!r}"
-        )
+        raise ValueError(f"{field} must not include a query string; got {value!r}")
     if parsed.fragment:
-        raise ValueError(f"config_origin must not include a fragment; got {value!r}")
+        raise ValueError(f"{field} must not include a fragment; got {value!r}")
     if parsed.username or parsed.password:
-        raise ValueError(f"config_origin must not include user info; got {value!r}")
+        raise ValueError(f"{field} must not include user info; got {value!r}")
     # netloc rather than hostname + port: it preserves the brackets around an IPv6
     # literal, which hostname strips. User info is already rejected above, so at
     # this point netloc is exactly the host and optional port.
@@ -62,7 +60,7 @@ class DynatraceProviderOptions:
         cls,
         sdk_key: str,
         config_origin: str | None = None,
-        metrics_url: str | None = None,
+        metrics_origin: str | None = None,
     ) -> DynatraceProviderOptions:
         if not sdk_key or not sdk_key.strip():
             raise ValueError("sdk_key must not be null or blank")
@@ -80,18 +78,21 @@ class DynatraceProviderOptions:
             config_origin = config_origin.strip()
             if not config_origin:
                 raise ValueError("config_origin must not be blank")
-            origin = _normalise_config_origin(config_origin)
+            origin = _normalise_origin(config_origin, "config_origin")
             base = origin + "/" + platform + "/"
         else:
             base = f"https://cdn.{geo}.fm.dynatrace.com/{platform}/"
         cdn_url = base + trimmed + ".json"
-        if metrics_url is not None:
-            metrics_url = metrics_url.strip()
-            if not metrics_url:
-                raise ValueError("metrics_url must not be blank")
-            resolved_metrics_url = metrics_url
+        if metrics_origin is not None:
+            metrics_origin = metrics_origin.strip()
+            if not metrics_origin:
+                raise ValueError("metrics_origin must not be blank")
+            origin = _normalise_origin(metrics_origin, "metrics_origin")
+            resolved_metrics_url = origin + _METRICS_PATH
         else:
-            resolved_metrics_url = f"https://metrics.{geo}.fm.dynatrace.com/v1/metrics"
+            resolved_metrics_url = (
+                f"https://metrics.{geo}.fm.dynatrace.com{_METRICS_PATH}"
+            )
         return cls(key=trimmed, cdn_url=cdn_url, metrics_url=resolved_metrics_url)
 
     @property

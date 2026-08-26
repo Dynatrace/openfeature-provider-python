@@ -141,15 +141,3 @@ class TestConstructor:
     def test_negative_metrics_flush_interval_raises(self) -> None:
         with pytest.raises(ValueError, match="metrics_flush_interval_s"):
             DynatraceProvider(_KEY, metrics_flush_interval_s=-1.0)
-
-
-class TestOptions:
-    def test_metrics_url_derived_from_geo(self) -> None:
-        opts = DynatraceProviderOptions.from_sdk_key(_KEY)
-        assert opts.metrics_url == "https://metrics.us.fm.dynatrace.com/v1/metrics"
-
-    def test_metrics_url_override(self) -> None:
-        opts = DynatraceProviderOptions.from_sdk_key(
-            _KEY, metrics_url="https://custom.example.com/m"
-        )
-        assert opts.metrics_url == "https://custom.example.com/m"

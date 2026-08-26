@@ -59,20 +59,51 @@ class TestFromSdkKey:
         )
         assert opts_slash.cdn_url == opts_no_slash.cdn_url
 
-    def test_blank_config_origin_raises(self) -> None:
+    def test_metrics_url_derived_from_geo(self) -> None:
+        opts = DynatraceProviderOptions.from_sdk_key(_VALID_KEY)
+        assert opts.metrics_url == "https://metrics.us.fm.dynatrace.com/v1/metrics"
+
+    def test_geo_reflected_in_metrics_url(self) -> None:
+        eu_key = "dt01.server_eu_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5"
+        opts = DynatraceProviderOptions.from_sdk_key(eu_key)
+        assert opts.metrics_url == "https://metrics.eu.fm.dynatrace.com/v1/metrics"
+
+    def test_metrics_origin_override(self) -> None:
+        opts = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY, metrics_origin="https://metrics.us.fm.dynatracelabs.com"
+        )
+        assert opts.metrics_url == (
+            "https://metrics.us.fm.dynatracelabs.com/v1/metrics"
+        )
+
+    def test_metrics_origin_trailing_slash_normalised(self) -> None:
+        opts_slash = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY, metrics_origin="https://example.com/"
+        )
+        opts_no_slash = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY, metrics_origin="https://example.com"
+        )
+        assert opts_slash.metrics_url == opts_no_slash.metrics_url
+        assert opts_slash.metrics_url == "https://example.com/v1/metrics"
+
+    @pytest.mark.parametrize("field", ["config_origin", "metrics_origin"])
+    def test_blank_origin_raises(self, field: str) -> None:
         with pytest.raises(ValueError, match="blank"):
-            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin="  ")
+            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, **{field: "  "})
 
-    def test_config_origin_with_path_raises(self) -> None:
+    @pytest.mark.parametrize("field", ["config_origin", "metrics_origin"])
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "https://example.com/server",
+            "https://example.com/v1/metrics",
+        ],
+    )
+    def test_origin_with_path_raises(self, field: str, value: str) -> None:
         with pytest.raises(ValueError, match="path"):
-            DynatraceProviderOptions.from_sdk_key(
-                _VALID_KEY, config_origin="https://example.com/server"
-            )
-        with pytest.raises(ValueError, match="path"):
-            DynatraceProviderOptions.from_sdk_key(
-                _VALID_KEY, config_origin="https://example.com/server/path"
-            )
+            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, **{field: value})
 
+    @pytest.mark.parametrize("field", ["config_origin", "metrics_origin"])
     @pytest.mark.parametrize(
         ("origin", "expected"),
         [
@@ -85,9 +116,9 @@ class TestFromSdkKey:
             ("https://example.com:notaport", "invalid port"),
         ],
     )
-    def test_non_origin_config_origin_raises(self, origin: str, expected: str) -> None:
+    def test_non_origin_raises(self, field: str, origin: str, expected: str) -> None:
         with pytest.raises(ValueError, match=expected):
-            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin=origin)
+            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, **{field: origin})
 
     @pytest.mark.parametrize(
         ("origin", "expected_base"),
@@ -102,3 +133,16 @@ class TestFromSdkKey:
     def test_config_origin_normalised(self, origin: str, expected_base: str) -> None:
         opts = DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin=origin)
         assert opts.cdn_url.startswith(expected_base + "/server/")
+
+    @pytest.mark.parametrize(
+        ("origin", "expected_base"),
+        [
+            ("http://localhost:8080//", "http://localhost:8080"),
+            ("HTTPS://Example.com", "https://example.com"),
+            ("http://[::1]:8080", "http://[::1]:8080"),
+            ("https://[2001:db8::1]", "https://[2001:db8::1]"),
+        ],
+    )
+    def test_metrics_origin_normalised(self, origin: str, expected_base: str) -> None:
+        opts = DynatraceProviderOptions.from_sdk_key(_VALID_KEY, metrics_origin=origin)
+        assert opts.metrics_url == expected_base + "/v1/metrics"
