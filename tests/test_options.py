@@ -50,6 +50,12 @@ class TestFromSdkKey:
         )
         assert opts.cdn_url.startswith("https://cdn.us.fm.dynatracelabs.com/server/")
 
+    def test_config_origin_keeps_default_port(self) -> None:
+        opts = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY, config_origin="https://cdn.example.com:443"
+        )
+        assert opts.cdn_url.startswith("https://cdn.example.com:443/server/")
+
     def test_config_origin_trailing_slash_normalised(self) -> None:
         opts_slash = DynatraceProviderOptions.from_sdk_key(
             _VALID_KEY, config_origin="https://example.com/"
@@ -97,6 +103,8 @@ class TestFromSdkKey:
         [
             "https://example.com/server",
             "https://example.com/v1/metrics",
+            "https://example.com//",
+            "https://example.com/..",
         ],
     )
     def test_origin_with_path_raises(self, field: str, value: str) -> None:

@@ -33,7 +33,7 @@ def _normalise_origin(value: str, field: str) -> str:
         raise ValueError(f"{field} has an invalid port; got {value!r}") from exc
     if not parsed.hostname:
         raise ValueError(f"{field} must include a host; got {value!r}")
-    if parsed.path.rstrip("/"):
+    if parsed.path and parsed.path != "/":
         raise ValueError(f"{field} must not include a path; got {value!r}")
     if parsed.query:
         raise ValueError(f"{field} must not include a query string; got {value!r}")
