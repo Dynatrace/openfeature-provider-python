@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.2.0](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.1.1...v0.2.0) (2026-08-27)
+
+
+### ⚠ BREAKING CHANGES
+
+* rename metrics_url to metrics_origin, accept origin-only value ([#20](https://github.com/Dynatrace/openfeature-provider-python/issues/20))
+
+### ✨ New Features
+
+* rename metrics_url to metrics_origin, accept origin-only value ([#20](https://github.com/Dynatrace/openfeature-provider-python/issues/20)) ([81f336e](https://github.com/Dynatrace/openfeature-provider-python/commit/81f336e9534ebb5b6f4311f1cb9edc4a592690f4))
+
 ## [0.1.1](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.1.0...v0.1.1) (2026-08-18)
 
 
