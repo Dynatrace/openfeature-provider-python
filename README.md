@@ -44,6 +44,22 @@ api.set_provider(
 )
 ```
 
+### Metrics origin override
+
+By default the metrics ingest endpoint is derived from the SDK key. To point
+metrics at a different environment or an SDK proxy, pass `metrics_origin`. The
+value is an origin only: scheme, host, and optional port, with no path. The
+provider appends `/v1/metrics` itself.
+
+```python
+api.set_provider(
+    DynatraceProvider(
+        sdk_key,
+        metrics_origin='https://metrics.eu.fm.dynatracelabs.com',
+    )
+)
+```
+
 ## Architecture
 
 The provider performs in-process flag evaluation using [flagd-core](https://github.com/open-feature/python-sdk-contrib/tree/main/tools/openfeature-flagd-core).

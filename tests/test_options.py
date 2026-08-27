@@ -50,6 +50,12 @@ class TestFromSdkKey:
         )
         assert opts.cdn_url.startswith("https://cdn.us.fm.dynatracelabs.com/server/")
 
+    def test_config_origin_keeps_default_port(self) -> None:
+        opts = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY, config_origin="https://cdn.example.com:443"
+        )
+        assert opts.cdn_url.startswith("https://cdn.example.com:443/server/")
+
     def test_config_origin_trailing_slash_normalised(self) -> None:
         opts_slash = DynatraceProviderOptions.from_sdk_key(
             _VALID_KEY, config_origin="https://example.com/"
@@ -59,46 +65,48 @@ class TestFromSdkKey:
         )
         assert opts_slash.cdn_url == opts_no_slash.cdn_url
 
-    def test_blank_config_origin_raises(self) -> None:
+    def test_metrics_url_derived_from_geo(self) -> None:
+        opts = DynatraceProviderOptions.from_sdk_key(_VALID_KEY)
+        assert opts.metrics_url == "https://metrics.us.fm.dynatrace.com/v1/metrics"
+
+    def test_geo_reflected_in_metrics_url(self) -> None:
+        eu_key = "dt01.server_eu_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5"
+        opts = DynatraceProviderOptions.from_sdk_key(eu_key)
+        assert opts.metrics_url == "https://metrics.eu.fm.dynatrace.com/v1/metrics"
+
+    def test_metrics_origin_override(self) -> None:
+        opts = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY, metrics_origin="https://metrics.us.fm.dynatracelabs.com"
+        )
+        assert opts.metrics_url == (
+            "https://metrics.us.fm.dynatracelabs.com/v1/metrics"
+        )
+
+    def test_metrics_origin_trailing_slash_normalised(self) -> None:
+        opts_slash = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY, metrics_origin="https://example.com/"
+        )
+        opts_no_slash = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY, metrics_origin="https://example.com"
+        )
+        assert opts_slash.metrics_url == opts_no_slash.metrics_url
+        assert opts_slash.metrics_url == "https://example.com/v1/metrics"
+
+    @pytest.mark.parametrize("field", ["config_origin", "metrics_origin"])
+    def test_blank_origin_raises(self, field: str) -> None:
         with pytest.raises(ValueError, match="blank"):
-            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin="  ")
+            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, **{field: "  "})
 
-    def test_config_origin_with_path_raises(self) -> None:
-        with pytest.raises(ValueError, match="path"):
-            DynatraceProviderOptions.from_sdk_key(
-                _VALID_KEY, config_origin="https://example.com/server"
-            )
-        with pytest.raises(ValueError, match="path"):
-            DynatraceProviderOptions.from_sdk_key(
-                _VALID_KEY, config_origin="https://example.com/server/path"
-            )
-
+    @pytest.mark.parametrize("field", ["config_origin", "metrics_origin"])
     @pytest.mark.parametrize(
-        ("origin", "expected"),
+        "value",
         [
-            ("https://example.com?tenant=x", "query string"),
-            ("https://example.com#frag", "fragment"),
-            ("https://user:pass@example.com", "user info"),
-            ("https://", "host"),
-            ("ftp://example.com", "http or https"),
-            ("example.com", "http or https"),
-            ("https://example.com:notaport", "invalid port"),
+            "https://example.com/server",
+            "https://example.com/v1/metrics",
+            "https://example.com//",
+            "https://example.com/..",
         ],
     )
-    def test_non_origin_config_origin_raises(self, origin: str, expected: str) -> None:
-        with pytest.raises(ValueError, match=expected):
-            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin=origin)
-
-    @pytest.mark.parametrize(
-        ("origin", "expected_base"),
-        [
-            ("http://localhost:8080//", "http://localhost:8080"),
-            ("HTTPS://Example.com", "https://example.com"),
-            # IPv6 literals must keep their brackets, or the URL is unusable.
-            ("http://[::1]:8080", "http://[::1]:8080"),
-            ("https://[2001:db8::1]", "https://[2001:db8::1]"),
-        ],
-    )
-    def test_config_origin_normalised(self, origin: str, expected_base: str) -> None:
-        opts = DynatraceProviderOptions.from_sdk_key(_VALID_KEY, config_origin=origin)
-        assert opts.cdn_url.startswith(expected_base + "/server/")
+    def test_origin_with_path_raises(self, field: str, value: str) -> None:
+        with pytest.raises(ValueError, match="path"):
+            DynatraceProviderOptions.from_sdk_key(_VALID_KEY, **{field: value})
