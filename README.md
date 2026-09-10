@@ -24,7 +24,7 @@ api.set_provider(DynatraceProvider("dt01.server_us_<key>"))
 
 client = api.get_client()
 ctx = EvaluationContext(targeting_key="user-123")
-enabled = client.get_boolean_value("my-feature", False, ctx)
+enabled = client.get_boolean_value("my-flag", False, ctx)
 
 # On shutdown:
 api.shutdown()
