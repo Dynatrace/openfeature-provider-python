@@ -38,6 +38,16 @@ for evaluation contexts, hooks, events, and the rest of the SDK surface.
 
 Pass options as keyword arguments to `DynatraceProvider`:
 
+```python
+api.set_provider(
+    DynatraceProvider(
+        sdk_key,
+        config_origin="https://cdn.eu.fm.dynatracelabs.com",
+        metrics_origin="https://metrics.eu.fm.dynatracelabs.com",
+    )
+)
+```
+
 | Option | Type | Default | Description |
 | --- | --- | --- | --- |
 | `config_origin` | `str` | derived from SDK key | Override the flag configuration origin. |
