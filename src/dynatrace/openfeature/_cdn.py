@@ -10,12 +10,25 @@ from email.utils import parsedate_to_datetime
 
 import requests
 
-from ._retry import RetryStrategy, default_should_retry_status
+from ._retry import (
+    MAX_ATTEMPTS,
+    MAX_BACKOFF_S,
+    RetryStrategy,
+    default_should_retry_status,
+)
 from .options import DynatraceProviderOptions
 
 log = logging.getLogger(__name__)
 
-REQUEST_TIMEOUT_S: float = 5.0
+REQUEST_TIMEOUT_S: float = 4.0
+
+#: Worst case wall time of a single fetch: every attempt timing out, plus the
+#: backoff between them. providers.md section 2.1 makes it an invariant that this
+#: stays below the shortest poll interval, so two polls can never be in flight at
+#: once. Any change to the timeout, the attempt count or the backoff must
+#: preserve it; :class:`DynatraceProvider` asserts it at construction.
+MAX_FETCH_DURATION_S: float = REQUEST_TIMEOUT_S * MAX_ATTEMPTS + MAX_BACKOFF_S
+
 _DEFAULT_RETRY_AFTER_MS: float = 60_000.0
 
 

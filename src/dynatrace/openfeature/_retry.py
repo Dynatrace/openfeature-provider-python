@@ -11,10 +11,16 @@ log = logging.getLogger(__name__)
 
 T = typing.TypeVar("T")
 
-_MAX_ATTEMPTS = 5
-_BASE_DELAY_MS = 100.0
-_MULTIPLIER = 2.0
-_MAX_JITTER_FACTOR = 0.20
+# A fetch is capped at two attempts so it can never outlive the shortest poll
+# interval (providers.md section 2.1): 4s + 0.12s + 4s = 8.12s < 10s. Beyond the
+# single retry, recovery is the next poll tick's job.
+MAX_ATTEMPTS = 2
+BASE_DELAY_MS = 100.0
+MAX_JITTER_FACTOR = 0.20
+
+#: Worst-case time spent backing off within one fetch, used to derive the
+#: fetch-duration bound in :mod:`._cdn`.
+MAX_BACKOFF_S = (BASE_DELAY_MS * (1.0 + MAX_JITTER_FACTOR)) / 1000.0
 
 
 class RetryStrategy:
@@ -30,9 +36,8 @@ class RetryStrategy:
     ) -> T:
         last_exception: BaseException | None = None
         last_result: T | None = None
-        delay_ms = _BASE_DELAY_MS
 
-        for attempt in range(1, _MAX_ATTEMPTS + 1):
+        for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 result = fn()
                 last_result = result
@@ -41,18 +46,18 @@ class RetryStrategy:
                 log.warning(
                     "attempt %d/%d returned retryable result; retrying",
                     attempt,
-                    _MAX_ATTEMPTS,
+                    MAX_ATTEMPTS,
                 )
             except retryable_exceptions as exc:
                 last_exception = exc
                 log.warning(
-                    "attempt %d/%d failed: %s; retrying", attempt, _MAX_ATTEMPTS, exc
+                    "attempt %d/%d failed: %s; retrying", attempt, MAX_ATTEMPTS, exc
                 )
             except Exception as exc:
                 raise OSError("unexpected error during fetch") from exc
 
-            if attempt < _MAX_ATTEMPTS:
-                delay_ms = self._backoff(delay_ms, cancel)
+            if attempt < MAX_ATTEMPTS:
+                self._backoff(cancel)
                 if cancel is not None and cancel.is_set():
                     break
 
@@ -62,14 +67,13 @@ class RetryStrategy:
             raise last_exception
         raise OSError("all retry attempts failed")
 
-    def _backoff(self, delay_ms: float, cancel: threading.Event | None) -> float:
-        jitter = delay_ms * self._rng.random() * _MAX_JITTER_FACTOR
-        sleep_ms = delay_ms + jitter
+    def _backoff(self, cancel: threading.Event | None) -> None:
+        jitter = BASE_DELAY_MS * self._rng.random() * MAX_JITTER_FACTOR
+        sleep_ms = BASE_DELAY_MS + jitter
         if cancel is not None:
             cancel.wait(sleep_ms / 1000.0)
         else:
             time.sleep(sleep_ms / 1000.0)
-        return delay_ms * _MULTIPLIER
 
 
 def default_should_retry_status(status: int) -> bool:

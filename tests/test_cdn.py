@@ -2,7 +2,11 @@ from random import Random
 
 import responses as rsps_lib
 
-from dynatrace.openfeature._cdn import CdnFetcher, _parse_retry_after_ms
+from dynatrace.openfeature._cdn import (
+    MAX_FETCH_DURATION_S,
+    CdnFetcher,
+    _parse_retry_after_ms,
+)
 from dynatrace.openfeature._retry import RetryStrategy
 from dynatrace.openfeature.options import DynatraceProviderOptions
 
@@ -12,6 +16,7 @@ _BODY = '{"flags":{}}'
 _ETAG = '"abc123"'
 _LM_OLD = "Thu, 01 May 2025 00:00:00 GMT"
 _LM_NEW = "Fri, 02 May 2025 00:00:00 GMT"
+_SHORTEST_POLL_INTERVAL_S = 10.0  # providers.md section 2.1 (SSE disconnected)
 
 
 def _fast_retry() -> RetryStrategy:
@@ -174,9 +179,23 @@ class TestCdnFetcherResponses:
     @rsps_lib.activate
     def test_retries_on_500(self) -> None:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_BODY, status=200)
         f = _fetcher()
         result = f.fetch()
         assert result.is_success
-        assert len(rsps_lib.calls) == 3
+        assert len(rsps_lib.calls) == 2
+
+    @rsps_lib.activate
+    def test_gives_up_after_two_attempts(self) -> None:
+        # providers.md section 2.4: a fetch is one attempt plus one retry, so it
+        # cannot outlive the shortest poll interval.
+        for _ in range(3):
+            rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        f = _fetcher()
+        result = f.fetch()
+        assert result.status == 500
+        assert len(rsps_lib.calls) == 2
+
+    def test_max_fetch_duration_stays_under_shortest_poll_interval(self) -> None:
+        # The invariant the two-attempt cap exists to preserve.
+        assert MAX_FETCH_DURATION_S < _SHORTEST_POLL_INTERVAL_S

@@ -8,7 +8,11 @@ from openfeature.exception import FlagNotFoundError, GeneralError
 from openfeature.provider import ProviderStatus
 
 from dynatrace.openfeature import DynatraceProvider
-from dynatrace.openfeature._cdn import CdnFetcher, FetchResult
+from dynatrace.openfeature._cdn import (
+    MAX_FETCH_DURATION_S,
+    CdnFetcher,
+    FetchResult,
+)
 from dynatrace.openfeature.options import DynatraceProviderOptions
 
 _KEY = "dt01.server_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5"
@@ -54,6 +58,44 @@ class TestInitialize:
         p = _make_provider()
         with pytest.raises(GeneralError, match="empty"):
             p.initialize()
+
+    @rsps_lib.activate
+    def test_init_failure_is_terminal(self) -> None:
+        # A failed initial fetch does not leave a poller running: the provider
+        # stays NOT_READY until the caller initializes it again.
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        p = _make_provider(poll_s=0.05)
+        with pytest.raises(GeneralError, match="HTTP 500"):
+            p.initialize()
+        assert p._state == ProviderStatus.NOT_READY
+        assert p._poller is None
+        assert len(rsps_lib.calls) == 2, "two attempts, then give up"
+
+    @rsps_lib.activate
+    def test_init_fetch_is_capped_at_two_attempts(self) -> None:
+        for _ in range(4):
+            rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        p = _make_provider()
+        with pytest.raises(GeneralError, match="HTTP 500"):
+            p.initialize()
+        assert len(rsps_lib.calls) == 2
+
+
+class TestFetchDurationInvariant:
+    def test_rejects_poll_interval_below_max_fetch_duration(self) -> None:
+        # The default 10s interval must stay above the 8.12s worst-case fetch.
+        with pytest.raises(ValueError, match="maximum fetch duration"):
+            DynatraceProvider(_KEY, poll_interval_s=MAX_FETCH_DURATION_S)
+
+    def test_accepts_poll_interval_above_max_fetch_duration(self) -> None:
+        p = DynatraceProvider(_KEY, poll_interval_s=MAX_FETCH_DURATION_S + 0.01)
+        p.shutdown()
+
+    def test_default_interval_satisfies_the_invariant(self) -> None:
+        p = DynatraceProvider(_KEY)
+        assert p._poll_interval_s > MAX_FETCH_DURATION_S
+        p.shutdown()
 
 
 class TestEvaluation:

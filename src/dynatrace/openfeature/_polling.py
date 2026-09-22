@@ -15,9 +15,15 @@ class PollingManager:
     Polls on a fixed-rate schedule anchored to request initiation, not completion.
 
     A ticker thread fires every interval_s regardless of how long the previous
-    fetch took. When the ticker fires it cancels any in-flight poll and starts a
-    fresh one on a worker thread. Cancelled polls are silent: no emitFailure is
-    called.
+    fetch took. At most one fetch is in flight at any time (providers.md section
+    2.1.1): a tick that fires while a poll is still running is skipped outright.
+    A skipped tick has no observable effect -- it emits neither success nor
+    failure, so it does not reset the staleness grace timer. The in-flight fetch
+    is left alone; it is already doing what the tick wanted.
+
+    Under the section 2.1 bound (max fetch duration < shortest poll interval) a
+    skipped tick should not occur at all. It is handled rather than assumed away
+    because the bound is a design invariant, not something the runtime enforces.
     """
 
     def __init__(
@@ -36,7 +42,8 @@ class PollingManager:
         self._emit_failure = emit_failure
         self._interval_s = interval_s
         self._stop_event = threading.Event()
-        self._current_cancel: threading.Event | None = None
+        self._in_flight = False
+        self._in_flight_lock = threading.Lock()
         self._ticker_thread: threading.Thread | None = None
 
     def start(self) -> None:
@@ -51,12 +58,11 @@ class PollingManager:
         self._ticker_thread.start()
 
     def stop(self) -> None:
+        # The stop event doubles as the cancel signal handed to the fetch, so an
+        # in-flight poll abandons its backoff instead of holding shutdown up.
         self._stop_event.set()
         if self._ticker_thread is not None:
             self._ticker_thread.join(timeout=2.0)
-        cancel = self._current_cancel
-        if cancel is not None:
-            cancel.set()
 
     def _ticker_loop(self) -> None:
         next_tick = time.monotonic() + self._interval_s
@@ -73,28 +79,37 @@ class PollingManager:
     def _dispatch(self) -> None:
         if self._stop_event.is_set():
             return
-        prev = self._current_cancel
-        if prev is not None:
-            prev.set()
-        cancel = threading.Event()
-        self._current_cancel = cancel
+        with self._in_flight_lock:
+            if self._in_flight:
+                # Skipped, not failed and not succeeded: the tick learned
+                # nothing, so it must not be reported as an outcome.
+                log.debug("poll tick skipped: a fetch is already in flight")
+                return
+            self._in_flight = True
         threading.Thread(
-            target=self._poll,
-            args=(cancel,),
+            target=self._run_poll,
             name="dt-provider-poller",
             daemon=True,
         ).start()
 
-    def _poll(self, cancel: threading.Event) -> None:
+    def _run_poll(self) -> None:
+        try:
+            self._poll()
+        finally:
+            with self._in_flight_lock:
+                self._in_flight = False
+
+    def _poll(self) -> None:
+        cancel = self._stop_event
         try:
             result = self._fetch_flags(cancel)
 
             if cancel.is_set():
-                log.debug("poll cancelled after fetch returned; discarding result")
+                log.debug("provider stopped during fetch; discarding result")
                 return
 
             if result.skipped:
-                log.debug("fetch skipped (lock contention); retaining cached state")
+                log.debug("fetch skipped (single-flight); emitting nothing")
                 return
 
             if result.is_not_modified:
@@ -124,7 +139,7 @@ class PollingManager:
 
         except Exception as exc:
             if cancel.is_set():
-                log.debug("poll cancelled")
+                log.debug("poll abandoned during shutdown")
                 return
             log.warning("poll failed: %s", type(exc).__name__)
             self._emit_failure(type(exc).__name__)

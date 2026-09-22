@@ -16,7 +16,7 @@ from openfeature.flag_evaluation import FlagResolutionDetails, FlagValueType
 from openfeature.hook import Hook
 from openfeature.provider import AbstractProvider, Metadata, ProviderStatus
 
-from ._cdn import REQUEST_TIMEOUT_S as _REQUEST_TIMEOUT_S
+from ._cdn import MAX_FETCH_DURATION_S as _MAX_FETCH_DURATION_S
 from ._cdn import CdnFetcher
 from ._metrics_aggregator import (
     HARD_CAP_DISTINCT_FLAGS,
@@ -61,10 +61,13 @@ class DynatraceProvider(AbstractProvider):
         options = DynatraceProviderOptions.from_sdk_key(
             sdk_key, config_origin=config_origin, metrics_origin=metrics_origin
         )
-        if fetcher is None and poll_interval_s <= _REQUEST_TIMEOUT_S:
+        # providers.md section 2.1: a poll can never outlive its interval, so two
+        # polls are never in flight at once. The bound is the whole fetch --
+        # every attempt plus the backoff between them -- not one request timeout.
+        if fetcher is None and poll_interval_s <= _MAX_FETCH_DURATION_S:
             raise ValueError(
                 f"poll_interval_s ({poll_interval_s}s) must be greater than the "
-                f"request timeout ({_REQUEST_TIMEOUT_S}s)"
+                f"maximum fetch duration ({_MAX_FETCH_DURATION_S:.2f}s)"
             )
         if metrics_flush_interval_s <= 0:
             raise ValueError(
@@ -108,6 +111,9 @@ class DynatraceProvider(AbstractProvider):
             self._generation += 1
             generation = self._generation
 
+        # The initial fetch is bounded like any other (two attempts, ~8s; see
+        # providers.md section 2.4). A failure here is terminal: the provider
+        # never reaches READY and no polling timer is started.
         try:
             result = self._fetcher.fetch()
         except (OSError, requests.RequestException) as exc:

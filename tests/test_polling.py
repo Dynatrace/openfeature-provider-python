@@ -8,6 +8,7 @@ _200 = FetchResult(200, '{"flags":{}}', None, None)
 _304 = FetchResult(304, None, None, None)
 _429 = FetchResult(429, None, None, None)
 _500 = FetchResult(500, None, None, None)
+_SKIPPED = FetchResult(0, None, None, None, skipped=True)
 
 _FAST_INTERVAL = 0.05  # 50ms for tests
 
@@ -37,83 +38,144 @@ def _make_pm(
     return pm, calls
 
 
-def _cancel() -> threading.Event:
-    return threading.Event()
-
-
 class TestPollingManagerPoll:
     def test_304_emits_success_only(self) -> None:
         pm, calls = _make_pm(_304)
-        pm._poll(_cancel())
+        pm._poll()
         assert calls["success"] == [True]
         assert calls["store"] == []
         assert calls["failure"] == []
 
     def test_200_stores_and_emits_success(self) -> None:
         pm, calls = _make_pm(_200)
-        pm._poll(_cancel())
+        pm._poll()
         assert calls["store"] == ['{"flags":{}}']
         assert calls["success"] == [True]
         assert calls["failure"] == []
 
     def test_200_emits_change_on_diff(self) -> None:
         pm, calls = _make_pm(_200, changed_keys=["flag-a", "flag-b"])
-        pm._poll(_cancel())
+        pm._poll()
         assert calls["change"] == [["flag-a", "flag-b"]]
 
     def test_200_no_change_no_change_event(self) -> None:
         pm, calls = _make_pm(_200, changed_keys=[])
-        pm._poll(_cancel())
+        pm._poll()
         assert calls["change"] == []
 
     def test_429_emits_nothing(self) -> None:
         pm, calls = _make_pm(_429)
-        pm._poll(_cancel())
+        pm._poll()
         assert calls["success"] == []
         assert calls["failure"] == []
 
+    def test_skipped_fetch_emits_nothing(self) -> None:
+        # A single-flight skip is neither a success nor a failure: reporting it
+        # as either would lie about an outcome the tick never observed.
+        pm, calls = _make_pm(_SKIPPED)
+        pm._poll()
+        assert calls["success"] == []
+        assert calls["failure"] == []
+        assert calls["store"] == []
+
     def test_500_emits_failure(self) -> None:
         pm, calls = _make_pm(_500)
-        pm._poll(_cancel())
+        pm._poll()
         assert calls["failure"] == ["HTTP 500"]
 
     def test_empty_body_emits_failure(self) -> None:
         pm, calls = _make_pm(FetchResult(200, "", None, None))
-        pm._poll(_cancel())
+        pm._poll()
         assert calls["failure"] == ["empty response body"]
 
     def test_exception_emits_failure(self) -> None:
         def boom(cancel=None):
             raise RuntimeError("boom")
 
-        pm = PollingManager(
-            fetch_flags=boom,
-            store_flags=lambda _: [],
-            emit_change=lambda _: None,
-            emit_success=lambda: None,
-            emit_failure=lambda r: None,
-            interval_s=_FAST_INTERVAL,
-        )
-        pm._poll(_cancel())  # should not raise
+        pm, calls = _make_pm(fetch_fn=boom)
+        pm._poll()  # should not raise
+        assert calls["failure"] == ["RuntimeError"]
 
-    def test_pre_cancelled_poll_discards_result(self) -> None:
+    def test_result_discarded_after_stop(self) -> None:
         pm, calls = _make_pm(_200)
-        cancel = _cancel()
-        cancel.set()
-        pm._poll(cancel)
+        pm._stop_event.set()
+        pm._poll()
         assert calls["success"] == []
         assert calls["failure"] == []
 
-    def test_cancelled_exception_does_not_emit_failure(self) -> None:
-        cancel = threading.Event()
+    def test_exception_during_shutdown_does_not_emit_failure(self) -> None:
+        pm, calls = _make_pm()
 
-        def fetch(c=None):
-            cancel.set()
+        def fetch(cancel=None):
+            pm._stop_event.set()
             raise OSError("network error")
 
-        pm, calls = _make_pm(fetch_fn=fetch)
-        pm._poll(cancel)
+        pm._fetch_flags = fetch
+        pm._poll()
         assert calls["failure"] == []
+
+
+class TestPollingManagerSingleFlight:
+    def test_tick_during_in_flight_fetch_is_skipped(self) -> None:
+        # providers.md section 2.1.1: the contended tick is skipped outright --
+        # the in-flight fetch is neither cancelled nor joined by a second one.
+        first_started = threading.Event()
+        release = threading.Event()
+        calls: list[str] = []
+        emitted: list[str] = []
+
+        def fetch(cancel=None) -> FetchResult:
+            calls.append("fetch")
+            if len(calls) == 1:
+                first_started.set()
+                release.wait(2.0)
+            return _304
+
+        pm = PollingManager(
+            fetch_flags=fetch,
+            store_flags=lambda _: [],
+            emit_change=lambda _: None,
+            emit_success=lambda: emitted.append("success"),
+            emit_failure=lambda r: emitted.append(f"failure:{r}"),
+            interval_s=_FAST_INTERVAL,
+        )
+        pm.start()
+        assert first_started.wait(timeout=1.0), "first poll should start"
+        # Several ticks elapse while the first fetch is blocked.
+        time.sleep(_FAST_INTERVAL * 4)
+        assert calls == ["fetch"], f"contended ticks must not fetch, got {calls}"
+        assert emitted == [], f"skipped ticks must emit nothing, got {emitted}"
+        release.set()
+        pm.stop()
+
+    def test_polling_resumes_after_slow_fetch_completes(self) -> None:
+        first_started = threading.Event()
+        second_started = threading.Event()
+        release = threading.Event()
+        count = [0]
+
+        def fetch(cancel=None) -> FetchResult:
+            count[0] += 1
+            if count[0] == 1:
+                first_started.set()
+                release.wait(2.0)
+            else:
+                second_started.set()
+            return _304
+
+        pm = PollingManager(
+            fetch_flags=fetch,
+            store_flags=lambda _: [],
+            emit_change=lambda _: None,
+            emit_success=lambda: None,
+            emit_failure=lambda _: None,
+            interval_s=_FAST_INTERVAL,
+        )
+        pm.start()
+        assert first_started.wait(timeout=1.0)
+        release.set()
+        assert second_started.wait(timeout=1.0), "next tick should poll normally"
+        pm.stop()
 
 
 class TestPollingManagerThreading:
@@ -156,49 +218,13 @@ class TestPollingManagerThreading:
         pm.stop()
         assert counter[0] >= 3
 
-    def test_fixed_rate_fires_during_slow_fetch(self) -> None:
-        # Fetch blocks for longer than the interval; ticker should not wait for it.
+    def test_slow_poll_does_not_emit_failure(self) -> None:
         started = threading.Event()
-        second_started = threading.Event()
-        call_count = [0]
-
-        def fetch(cancel=None) -> FetchResult:
-            call_count[0] += 1
-            if call_count[0] == 1:
-                started.set()
-                (cancel or threading.Event()).wait(
-                    10
-                )  # blocks until cancelled or timeout
-            else:
-                second_started.set()
-            return _304
-
-        pm = PollingManager(
-            fetch_flags=fetch,
-            store_flags=lambda _: [],
-            emit_change=lambda _: None,
-            emit_success=lambda: None,
-            emit_failure=lambda _: None,
-            interval_s=_FAST_INTERVAL,
-        )
-        pm.start()
-        assert started.wait(timeout=1.0), "first poll should start"
-        assert second_started.wait(timeout=1.0), (
-            "second poll should start without waiting for first"
-        )
-        pm.stop()
-
-    def test_cancelled_poll_does_not_emit_failure(self) -> None:
-        second_started = threading.Event()
         failures: list[str] = []
-        call_count = [0]
 
         def fetch(cancel=None) -> FetchResult:
-            call_count[0] += 1
-            if call_count[0] == 1:
-                (cancel or threading.Event()).wait(10)
-            else:
-                second_started.set()
+            started.set()
+            (cancel or threading.Event()).wait(10)
             return _304
 
         pm = PollingManager(
@@ -210,9 +236,10 @@ class TestPollingManagerThreading:
             interval_s=_FAST_INTERVAL,
         )
         pm.start()
-        assert second_started.wait(timeout=1.0)
+        assert started.wait(timeout=1.0)
+        time.sleep(_FAST_INTERVAL * 3)
         pm.stop()
-        assert failures == [], f"cancelled poll must not emit failure, got: {failures}"
+        assert failures == [], f"skipped ticks must not emit failure, got: {failures}"
 
     def test_stop_returns_promptly(self) -> None:
         started = threading.Event()
