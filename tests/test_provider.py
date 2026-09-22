@@ -1,5 +1,6 @@
 import json
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -36,6 +37,17 @@ def _make_provider(
     )
 
 
+def _wait_for_state(
+    provider: DynatraceProvider,
+    expected: ProviderStatus,
+    timeout_s: float = 3.0,
+) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline and provider._state != expected:
+        time.sleep(0.02)
+    assert provider._state == expected, f"never reached {expected}"
+
+
 class TestInitialize:
     @rsps_lib.activate
     def test_successful_init_sets_ready(self) -> None:
@@ -60,19 +72,6 @@ class TestInitialize:
             p.initialize()
 
     @rsps_lib.activate
-    def test_init_failure_is_terminal(self) -> None:
-        # A failed initial fetch does not leave a poller running: the provider
-        # stays NOT_READY until the caller initializes it again.
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
-        p = _make_provider(poll_s=0.05)
-        with pytest.raises(GeneralError, match="HTTP 500"):
-            p.initialize()
-        assert p._state == ProviderStatus.NOT_READY
-        assert p._poller is None
-        assert len(rsps_lib.calls) == 2, "two attempts, then give up"
-
-    @rsps_lib.activate
     def test_init_fetch_is_capped_at_two_attempts(self) -> None:
         for _ in range(4):
             rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
@@ -80,6 +79,46 @@ class TestInitialize:
         with pytest.raises(GeneralError, match="HTTP 500"):
             p.initialize()
         assert len(rsps_lib.calls) == 2
+        p.shutdown()
+
+    @rsps_lib.activate
+    def test_init_failure_enters_error_and_keeps_polling(self) -> None:
+        # providers.md section 2.4: initialization fails fast, but it is not
+        # terminal -- the provider goes to ERROR and the polling timer retries.
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=404)
+        p = _make_provider()
+        with pytest.raises(GeneralError, match="HTTP 404"):
+            p.initialize()
+        assert p._state == ProviderStatus.ERROR
+        assert p._poller is not None
+        p.shutdown()
+
+    @rsps_lib.activate
+    def test_init_auth_failure_keeps_retrying(self) -> None:
+        # No FATAL state (section 4): a 401 is recoverable, so the provider must
+        # still be polling after it.
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=401)
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
+        p = _make_provider(poll_s=0.05)
+        with pytest.raises(GeneralError, match="HTTP 401"):
+            p.initialize()
+        assert p._state == ProviderStatus.ERROR
+        _wait_for_state(p, ProviderStatus.READY)
+        p.shutdown()
+
+    @rsps_lib.activate
+    def test_recovers_to_ready_when_a_later_poll_succeeds(self) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
+        p = _make_provider(poll_s=0.05)
+        with pytest.raises(GeneralError, match="HTTP 500"):
+            p.initialize()
+        assert p._state == ProviderStatus.ERROR
+        _wait_for_state(p, ProviderStatus.READY)
+        # the recovered config is live, not just the state flag
+        assert p.resolve_boolean_details("my-bool-flag", False).value is True
+        p.shutdown()
 
 
 class TestFetchDurationInvariant:

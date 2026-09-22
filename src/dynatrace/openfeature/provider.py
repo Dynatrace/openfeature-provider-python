@@ -112,25 +112,30 @@ class DynatraceProvider(AbstractProvider):
             generation = self._generation
 
         # The initial fetch is bounded like any other (two attempts, ~8s; see
-        # providers.md section 2.4). A failure here is terminal: the provider
-        # never reaches READY and no polling timer is started.
+        # providers.md section 2.4). Failing fast surfaces misconfiguration at
+        # startup, but it is not terminal: the provider enters ERROR and the
+        # polling timer carries it to READY if the failure was transient.
         try:
             result = self._fetcher.fetch()
         except (OSError, requests.RequestException) as exc:
+            self._fail_initialization(generation, f"fetch failed: {type(exc).__name__}")
             raise GeneralError(
                 f"initial CDN fetch failed: {type(exc).__name__}"
             ) from exc
 
         if not result.is_success:
+            self._fail_initialization(generation, f"HTTP {result.status}")
             raise GeneralError(f"initial CDN fetch returned HTTP {result.status}")
 
         body = result.body
         if not body or not body.strip():
+            self._fail_initialization(generation, "empty response body")
             raise GeneralError("initial CDN response body was empty")
 
         try:
             self._flagd_core.set_flags(body)
         except ParseError as exc:
+            self._fail_initialization(generation, f"invalid config: {exc}")
             raise GeneralError(f"initial CDN config is invalid: {exc}") from exc
 
         # Set the aggregator version eagerly so it is authoritative before any
@@ -147,20 +152,47 @@ class DynatraceProvider(AbstractProvider):
                 )
                 return
             self._cancel_grace_timer()
-            if self._poller is not None:
-                self._poller.stop()
             self._state = ProviderStatus.READY
-            self._poller = PollingManager(
-                fetch_flags=self._fetcher.fetch,
-                store_flags=self._store_flags,
-                emit_change=self._on_configuration_changed,
-                emit_success=self._on_fetch_success,
-                emit_failure=self._on_fetch_failure,
-                interval_s=self._poll_interval_s,
-            )
-            self._poller.start()
+            self._start_poller_locked()
         self._metrics_flusher.start()
         log.info("Dynatrace provider initialized successfully")
+
+    def _start_poller_locked(self) -> None:
+        """Replace any existing poller with a fresh one. Caller holds ``_lock``."""
+        if self._poller is not None:
+            self._poller.stop()
+        self._poller = PollingManager(
+            fetch_flags=self._fetcher.fetch,
+            store_flags=self._store_flags,
+            emit_change=self._on_configuration_changed,
+            emit_success=self._on_fetch_success,
+            emit_failure=self._on_fetch_failure,
+            interval_s=self._poll_interval_s,
+        )
+        self._poller.start()
+
+    def _fail_initialization(self, generation: int, reason: str) -> None:
+        """Enter ERROR and start polling so the provider can still recover.
+
+        The caller raises afterwards, so the SDK sees initialization fail and the
+        cause is visible at startup; the polling timer is what brings the
+        provider back (providers.md section 2.4). Auth failures take this path
+        too -- 401/403 are ERROR, never FATAL -- because a rotated token or a
+        service-side fault should not permanently disable the provider. Until a
+        poll succeeds, evaluations fall back to their defaults.
+        """
+        with self._lock:
+            if self._generation != generation:
+                log.info(
+                    "initialize superseded by a concurrent shutdown/initialize; "
+                    "not starting recovery poller"
+                )
+                return
+            log.warning("initialization failed (%s); polling for recovery", reason)
+            self._state = ProviderStatus.ERROR
+            self._cancel_grace_timer()
+            self._start_poller_locked()
+        self._metrics_flusher.start()
 
     def shutdown(self) -> None:
         with self._lock:
