@@ -19,8 +19,11 @@ BASE_DELAY_MS = 100.0
 MAX_JITTER_FACTOR = 0.20
 
 #: Worst-case time spent backing off within one fetch, used to derive the
-#: fetch-duration bound in :mod:`._cdn`.
-MAX_BACKOFF_S = (BASE_DELAY_MS * (1.0 + MAX_JITTER_FACTOR)) / 1000.0
+#: fetch-duration bound in :mod:`._cdn`. There is one backoff between each pair
+#: of attempts, so this tracks MAX_ATTEMPTS rather than assuming a single retry.
+MAX_BACKOFF_S = (
+    (MAX_ATTEMPTS - 1) * BASE_DELAY_MS * (1.0 + MAX_JITTER_FACTOR)
+) / 1000.0
 
 
 class RetryStrategy:

@@ -120,6 +120,57 @@ class TestInitialize:
         assert p.resolve_boolean_details("my-bool-flag", False).value is True
         p.shutdown()
 
+    @rsps_lib.activate
+    def test_rejected_init_config_does_not_leave_validators_behind(self) -> None:
+        # The 200 carries validators, but the body never reaches the flag store.
+        # If they survived, the recovery poll would revalidate to 304 and report
+        # success over an empty store.
+        rsps_lib.add(
+            rsps_lib.GET,
+            _CDN_URL,
+            body='{"flags": 5}',
+            status=200,
+            headers={"ETag": '"v1"'},
+        )
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
+        p = _make_provider(poll_s=0.05)
+        with pytest.raises(GeneralError, match="invalid"):
+            p.initialize()
+        assert p._state == ProviderStatus.ERROR
+        _wait_for_state(p, ProviderStatus.READY)
+        assert p.resolve_boolean_details("my-bool-flag", False).value is True
+        # The recovery poll asked for the full body, not a revalidation.
+        assert rsps_lib.calls[1].request.headers.get("If-None-Match") is None
+        p.shutdown()
+
+    @rsps_lib.activate
+    def test_rejected_poll_config_does_not_leave_validators_behind(self) -> None:
+        rsps_lib.add(
+            rsps_lib.GET,
+            _CDN_URL,
+            body=_FIXTURE.read_text(),
+            status=200,
+            headers={"ETag": '"v1"'},
+        )
+        rsps_lib.add(
+            rsps_lib.GET,
+            _CDN_URL,
+            body='{"flags": 5}',
+            status=200,
+            headers={"ETag": '"v2"'},
+        )
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
+        p = _make_provider(poll_s=0.05)
+        p.initialize()
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and len(rsps_lib.calls) < 3:
+            time.sleep(0.02)
+        assert len(rsps_lib.calls) >= 3
+        # Second poll re-requests the body instead of revalidating the config
+        # that was rejected.
+        assert rsps_lib.calls[2].request.headers.get("If-None-Match") is None
+        p.shutdown()
+
 
 class TestFetchDurationInvariant:
     def test_rejects_poll_interval_below_max_fetch_duration(self) -> None:

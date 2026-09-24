@@ -11,7 +11,7 @@ import requests
 from openfeature.contrib.tools.flagd.core import FlagdCore
 from openfeature.evaluation_context import EvaluationContext
 from openfeature.event import ProviderEventDetails
-from openfeature.exception import GeneralError, ParseError
+from openfeature.exception import GeneralError
 from openfeature.flag_evaluation import FlagResolutionDetails, FlagValueType
 from openfeature.hook import Hook
 from openfeature.provider import AbstractProvider, Metadata, ProviderStatus
@@ -111,30 +111,14 @@ class DynatraceProvider(AbstractProvider):
             self._generation += 1
             generation = self._generation
 
-        # The initial fetch is bounded like any other (two attempts, ~8s; see
-        # providers.md section 2.4). Failing fast surfaces misconfiguration at
-        # startup, but it is not terminal: the provider enters ERROR and the
-        # polling timer carries it to READY if the failure was transient.
-        try:
-            result = self._fetcher.fetch()
-        except (OSError, requests.RequestException) as exc:
-            self._fail_initialization(generation, f"fetch failed: {type(exc).__name__}")
-            raise GeneralError(
-                f"initial CDN fetch failed: {type(exc).__name__}"
-            ) from exc
-
-        if not result.is_success:
-            self._fail_initialization(generation, f"HTTP {result.status}")
-            raise GeneralError(f"initial CDN fetch returned HTTP {result.status}")
-
-        body = result.body
-        if not body or not body.strip():
-            self._fail_initialization(generation, "empty response body")
-            raise GeneralError("initial CDN response body was empty")
+        body = self._fetch_initial_body(generation)
 
         try:
             self._flagd_core.set_flags(body)
-        except ParseError as exc:
+        except Exception as exc:
+            # Not just ParseError: a body that is not JSON at all surfaces as a
+            # JSONDecodeError, and that must still leave a recoverable provider
+            # rather than escaping initialize() raw.
             self._fail_initialization(generation, f"invalid config: {exc}")
             raise GeneralError(f"initial CDN config is invalid: {exc}") from exc
 
@@ -156,6 +140,39 @@ class DynatraceProvider(AbstractProvider):
             self._start_poller_locked()
         self._metrics_flusher.start()
         log.info("Dynatrace provider initialized successfully")
+
+    def _fetch_initial_body(self, generation: int) -> str:
+        """Fetch the startup config, or fail initialization and raise.
+
+        The initial fetch is bounded like any other (two attempts, ~8s; see
+        providers.md section 2.4). Failing fast surfaces misconfiguration at
+        startup, but it is not terminal: the provider enters ERROR and the
+        polling timer carries it to READY if the failure was transient.
+        """
+        try:
+            result = self._fetcher.fetch()
+        except (OSError, requests.RequestException) as exc:
+            self._fail_initialization(generation, f"fetch failed: {type(exc).__name__}")
+            raise GeneralError(
+                f"initial CDN fetch failed: {type(exc).__name__}"
+            ) from exc
+
+        if result.skipped:
+            # Another fetch held the lock, or a Retry-After window was open. No
+            # request was made, so there is no status to report.
+            self._fail_initialization(generation, "fetch skipped")
+            raise GeneralError("initial CDN fetch was skipped; no request was made")
+
+        if not result.is_success:
+            self._fail_initialization(generation, f"HTTP {result.status}")
+            raise GeneralError(f"initial CDN fetch returned HTTP {result.status}")
+
+        body = result.body
+        if not body or not body.strip():
+            self._fail_initialization(generation, "empty response body")
+            raise GeneralError("initial CDN response body was empty")
+
+        return body
 
     def _start_poller_locked(self) -> None:
         """Replace any existing poller with a fresh one. Caller holds ``_lock``."""
@@ -181,6 +198,10 @@ class DynatraceProvider(AbstractProvider):
         service-side fault should not permanently disable the provider. Until a
         poll succeeds, evaluations fall back to their defaults.
         """
+        # No config was applied, so any validators cached during this attempt
+        # describe flags the provider does not hold. Leaving them would let the
+        # recovery poll revalidate to 304 and report success over an empty store.
+        self._fetcher.invalidate_cache()
         with self._lock:
             if self._generation != generation:
                 log.info(
@@ -279,7 +300,14 @@ class DynatraceProvider(AbstractProvider):
         sealed = self._metrics_aggregator.drain()
         self._metrics_flusher.enqueue_sealed_batch(sealed)
         self._metrics_flusher.trigger_flush()
-        changed = self._flagd_core.set_flags_and_get_changed_keys(body)
+        try:
+            changed = self._flagd_core.set_flags_and_get_changed_keys(body)
+        except Exception:
+            # The body was fetched but not applied, so the validators cached for
+            # it would make the next poll a 304 over the previous config. Drop
+            # them so the next poll pulls the body again.
+            self._fetcher.invalidate_cache()
+            raise
         self._update_metrics_version_from_flag_set()
         return changed
 

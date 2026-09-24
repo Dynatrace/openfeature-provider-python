@@ -84,10 +84,25 @@ class CdnFetcher:
         t = now if now is not None else self._clock()
         return t < self._rate_limited_until
 
+    def invalidate_cache(self) -> None:
+        """Forget the cached validators.
+
+        The validators are stored as soon as a 2xx arrives, before the caller
+        has had a chance to apply the body. When applying it fails, the cached
+        ETag/Last-Modified describe a config the provider never loaded, and the
+        next conditional request would come back 304 -- which reads as "your
+        copy is current" and would quietly confirm an empty flag store. Dropping
+        them forces the next fetch to ask for the full body again.
+        """
+        self._cache = _CacheState()
+
     def fetch(self, cancel: threading.Event | None = None) -> FetchResult:
+        # No request is made inside the Retry-After window, so this is a skip
+        # like lock contention and not a 429 from the CDN: the caller learned
+        # nothing and must report neither success nor failure.
         if self.is_rate_limited():
             log.debug("rate limited; skipping fetch")
-            return FetchResult(429, None, None, None)
+            return FetchResult(0, None, None, None, skipped=True)
         if not self._fetch_lock.acquire(blocking=False):
             log.debug("fetch already in progress; skipping")
             return FetchResult(0, None, None, None, skipped=True)

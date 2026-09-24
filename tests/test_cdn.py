@@ -116,7 +116,10 @@ class TestCdnFetcherResponses:
         f = _fetcher(clock=lambda: fixed_now)
         f._rate_limited_until = fixed_now + 60.0
         result = f.fetch()
-        assert result.is_rate_limited
+        # No request leaves the process inside the window, so the caller learned
+        # nothing: a skip, not a 429 the CDN actually sent.
+        assert result.skipped
+        assert not result.is_rate_limited
 
     @rsps_lib.activate
     def test_stale_node_defense_same_last_modified(self) -> None:
