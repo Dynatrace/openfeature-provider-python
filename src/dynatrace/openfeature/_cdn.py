@@ -9,6 +9,7 @@ from datetime import datetime
 from email.utils import parsedate_to_datetime
 
 import requests
+from urllib3.util import Timeout as Urllib3Timeout
 
 from ._retry import (
     MAX_ATTEMPTS,
@@ -30,6 +31,8 @@ REQUEST_TIMEOUT_S: float = 4.0
 MAX_FETCH_DURATION_S: float = REQUEST_TIMEOUT_S * MAX_ATTEMPTS + MAX_BACKOFF_S
 
 _DEFAULT_RETRY_AFTER_MS: float = 60_000.0
+_BODY_CHUNK_BYTES = 64 * 1024
+_BUDGET_EXCEEDED = "response body exceeded the fetch budget"
 
 
 @dataclass
@@ -124,28 +127,37 @@ class CdnFetcher:
         if cache.last_modified_header is not None:
             headers["If-Modified-Since"] = cache.last_modified_header
 
-        try:
-            resp = self._session.get(
-                self._url,
-                headers=headers,
-                timeout=REQUEST_TIMEOUT_S,
-            )
-        except requests.RequestException:
-            raise
+        deadline = time.monotonic() + REQUEST_TIMEOUT_S
+        # urllib3's total covers connect plus time-to-first-byte. A plain float
+        # or (connect, read) tuple would let those two phases each take the full
+        # timeout, doubling the worst case. HTTPAdapter.send hands a urllib3
+        # Timeout straight through; only requests' type stubs are unaware.
+        timeout = Urllib3Timeout(
+            connect=REQUEST_TIMEOUT_S,
+            read=REQUEST_TIMEOUT_S,
+            total=REQUEST_TIMEOUT_S,
+        )
+        with self._session.get(
+            self._url,
+            headers=headers,
+            timeout=timeout,  # type: ignore[arg-type]
+            # The body is read against the same deadline below; see
+            # _read_body_within for why the library cannot bound it for us.
+            stream=True,
+        ) as resp:
+            if resp.status_code == 304:
+                return FetchResult(304, None, cache.etag, cache.last_modified_header)
 
-        if resp.status_code == 304:
-            return FetchResult(304, None, cache.etag, cache.last_modified_header)
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                delay_ms = _parse_retry_after_ms(retry_after, self._clock())
+                self._rate_limited_until = self._clock() + delay_ms / 1000.0
+                log.warning("rate limited (429); pausing fetches for %.0fms", delay_ms)
+                return FetchResult(429, None, None, None)
 
-        if resp.status_code == 429:
-            retry_after = resp.headers.get("Retry-After")
-            delay_ms = _parse_retry_after_ms(retry_after, self._clock())
-            self._rate_limited_until = self._clock() + delay_ms / 1000.0
-            log.warning("rate limited (429); pausing fetches for %.0fms", delay_ms)
-            return FetchResult(429, None, None, None)
-
-        new_etag = resp.headers.get("ETag")
-        new_last_modified = resp.headers.get("Last-Modified")
-        body = resp.text
+            new_etag = resp.headers.get("ETag")
+            new_last_modified = resp.headers.get("Last-Modified")
+            body = _read_body_within(resp, deadline)
 
         if resp.status_code >= 200 and resp.status_code < 300:
             new_lm_at = _parse_http_date(new_last_modified)
@@ -168,6 +180,52 @@ class CdnFetcher:
             )
 
         return FetchResult(resp.status_code, body, new_etag, new_last_modified)
+
+
+def _read_body_within(resp: requests.Response, deadline: float) -> str:
+    """Read the response body, giving up once ``deadline`` passes.
+
+    No timeout the HTTP stack offers bounds this. A float or (connect, read)
+    timeout measures inactivity between socket reads, and urllib3's ``total``
+    only subtracts the connect duration before being applied as the socket's
+    per-read timeout. A server that keeps trickling bytes resets the clock on
+    every one of them, so the fetch runs as long as it likes. That would make
+    MAX_FETCH_DURATION_S a description rather than a bound, and the bound is
+    what keeps two polls from ever being in flight at once.
+
+    Chunking and checking the clock between chunks is not enough either: a read
+    blocks until the full chunk arrives. The deadline has to interrupt the read
+    itself, which is what :meth:`urllib3.HTTPResponse.shutdown` is for.
+    """
+    raw = resp.raw
+    expired = threading.Event()
+
+    def _abort() -> None:
+        expired.set()
+        try:
+            raw.shutdown()
+        except Exception:  # connection already released, or nothing to interrupt
+            log.debug("could not shut down the response socket", exc_info=True)
+
+    watchdog = threading.Timer(max(0.0, deadline - time.monotonic()), _abort)
+    watchdog.daemon = True
+    watchdog.start()
+    chunks: list[bytes] = []
+    try:
+        chunks.extend(resp.iter_content(_BODY_CHUNK_BYTES))
+    except (requests.RequestException, OSError):
+        # A torn-down socket surfaces as a read error; report it as what it is.
+        if expired.is_set():
+            raise requests.Timeout(_BUDGET_EXCEEDED) from None
+        raise
+    finally:
+        watchdog.cancel()
+
+    if expired.is_set():
+        # The body did arrive, just not inside the budget.
+        raise requests.Timeout(_BUDGET_EXCEEDED)
+
+    return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")
 
 
 def _parse_http_date(value: str | None) -> datetime | None:

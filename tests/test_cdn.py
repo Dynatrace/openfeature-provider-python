@@ -1,7 +1,13 @@
+import socket
+import threading
+import time
 from random import Random
 
+import pytest
+import requests
 import responses as rsps_lib
 
+from dynatrace.openfeature import _cdn as cdn
 from dynatrace.openfeature._cdn import (
     MAX_FETCH_DURATION_S,
     CdnFetcher,
@@ -202,3 +208,72 @@ class TestCdnFetcherResponses:
     def test_max_fetch_duration_stays_under_shortest_poll_interval(self) -> None:
         # The invariant the two-attempt cap exists to preserve.
         assert MAX_FETCH_DURATION_S < _SHORTEST_POLL_INTERVAL_S
+
+
+class TestFetchDeadline:
+    """The body read must respect the fetch budget.
+
+    No timeout requests or urllib3 offers bounds it: they all measure
+    inactivity between socket reads, so a server that trickles bytes can stretch
+    a fetch indefinitely and MAX_FETCH_DURATION_S stops being a real bound.
+    """
+
+    @staticmethod
+    def _drip_server(chunk_delay_s: float, chunks: int) -> tuple[str, socket.socket]:
+        srv = socket.socket()
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(8)
+
+        def serve() -> None:
+            while True:
+                try:
+                    conn, _ = srv.accept()
+                except OSError:
+                    return
+                conn.recv(4096)
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % chunks)
+                for _ in range(chunks):
+                    time.sleep(chunk_delay_s)
+                    try:
+                        conn.sendall(b"x")
+                    except OSError:
+                        break
+                conn.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        return f"http://127.0.0.1:{srv.getsockname()[1]}/", srv
+
+    def test_slow_body_is_cut_off_at_the_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        budget = 0.4
+        monkeypatch.setattr(cdn, "REQUEST_TIMEOUT_S", budget)
+        # Each chunk lands inside the read timeout but the body as a whole runs
+        # far past the budget, which is exactly the case the socket timeout
+        # cannot catch.
+        url, srv = self._drip_server(chunk_delay_s=budget / 2, chunks=20)
+        f = _fetcher()
+        f._url = url
+        try:
+            started = time.monotonic()
+            with pytest.raises(requests.Timeout):
+                f._do_fetch()
+            elapsed = time.monotonic() - started
+        finally:
+            srv.close()
+        assert elapsed < budget * 3, (
+            f"body read ran {elapsed:.2f}s past a {budget}s budget"
+        )
+
+    def test_prompt_body_is_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cdn, "REQUEST_TIMEOUT_S", 4.0)
+        url, srv = self._drip_server(chunk_delay_s=0.0, chunks=5)
+        f = _fetcher()
+        f._url = url
+        try:
+            result = f._do_fetch()
+        finally:
+            srv.close()
+        assert result.status == 200
+        assert result.body == "xxxxx"
