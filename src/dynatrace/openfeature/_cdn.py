@@ -100,9 +100,21 @@ class CdnFetcher:
         self._cache = _CacheState()
 
     def fetch(self, cancel: threading.Event | None = None) -> FetchResult:
-        # No request is made inside the Retry-After window, so this is a skip
-        # like lock contention and not a 429 from the CDN: the caller learned
-        # nothing and must report neither success nor failure.
+        """Fetch the config, or return a skipped result without making a request.
+
+        A skip means no request was made, either because a fetch is already in
+        flight (providers.md section 2.1.1) or because a Retry-After window is
+        open (section 2.3). It is neither a success nor a failure: the caller
+        learned nothing and must report nothing.
+
+        :class:`PollingManager` already serialises its own fetches, so the
+        in-flight guard is defence in depth for callers outside it, namely
+        :meth:`DynatraceProvider.initialize` fetching on the caller's thread. It
+        is also what keeps the cached validators coherent: a conditional request
+        reads them before sending and stores the new pair afterwards, so two
+        interleaved fetches could leave an ETag and a Last-Modified behind that
+        came from different responses.
+        """
         if self.is_rate_limited():
             log.debug("rate limited; skipping fetch")
             return FetchResult(0, None, None, None, skipped=True)

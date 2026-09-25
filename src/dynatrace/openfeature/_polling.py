@@ -61,6 +61,11 @@ class PollingManager:
         # The stop event doubles as the cancel signal handed to the fetch, so an
         # in-flight poll abandons its backoff instead of holding shutdown up.
         self._stop_event.set()
+        with self._in_flight_lock:
+            # A stopped poller is not reused today -- the provider builds a
+            # fresh one -- but leaving the slot claimed would silently skip
+            # every tick if one ever were.
+            self._in_flight = False
         if self._ticker_thread is not None:
             self._ticker_thread.join(timeout=2.0)
 
