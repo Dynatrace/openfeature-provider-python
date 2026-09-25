@@ -15,15 +15,11 @@ class PollingManager:
     Polls on a fixed-rate schedule anchored to request initiation, not completion.
 
     A ticker thread fires every interval_s regardless of how long the previous
-    fetch took. At most one fetch is in flight at any time (providers.md section
-    2.1.1): a tick that fires while a poll is still running is skipped outright.
-    A skipped tick has no observable effect -- it emits neither success nor
-    failure, so it does not reset the staleness grace timer. The in-flight fetch
-    is left alone; it is already doing what the tick wanted.
-
-    Under the section 2.1 bound (max fetch duration < shortest poll interval) a
-    skipped tick should not occur at all. It is handled rather than assumed away
-    because the bound is a design invariant, not something the runtime enforces.
+    fetch took. At most one fetch is in flight at a time (providers.md section
+    2.1.1): a tick firing during a poll is skipped and emits nothing, so it does
+    not reset the staleness grace timer. The section 2.1 bound should keep that
+    from happening at all, but the bound is a design invariant rather than
+    something the runtime enforces, so the case is handled.
     """
 
     def __init__(
@@ -61,11 +57,8 @@ class PollingManager:
         # The stop event doubles as the cancel signal handed to the fetch, so an
         # in-flight poll abandons its backoff instead of holding shutdown up.
         self._stop_event.set()
-        with self._in_flight_lock:
-            # A stopped poller is not reused today -- the provider builds a
-            # fresh one -- but leaving the slot claimed would silently skip
-            # every tick if one ever were.
-            self._in_flight = False
+        # _in_flight is left alone: only _run_poll's finally knows when the
+        # fetch is done, and clearing it here would let a restart double up.
         if self._ticker_thread is not None:
             self._ticker_thread.join(timeout=2.0)
 
@@ -86,8 +79,7 @@ class PollingManager:
             return
         with self._in_flight_lock:
             if self._in_flight:
-                # Skipped, not failed and not succeeded: the tick learned
-                # nothing, so it must not be reported as an outcome.
+                # Neither failed nor succeeded: the tick learned nothing.
                 log.debug("poll tick skipped: a fetch is already in flight")
                 return
             self._in_flight = True

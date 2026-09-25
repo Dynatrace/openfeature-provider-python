@@ -117,6 +117,21 @@ class TestCdnFetcherResponses:
         assert f.is_rate_limited(now=fixed_now + 59)
         assert not f.is_rate_limited(now=fixed_now + 61)
 
+    @rsps_lib.activate
+    def test_redirects_are_not_followed(self) -> None:
+        # Each hop would get its own full timeout, so a chain of them would run
+        # past MAX_FETCH_DURATION_S and break the single-flight bound.
+        rsps_lib.add(
+            rsps_lib.GET,
+            _CDN_URL,
+            status=302,
+            headers={"Location": "https://elsewhere.example/config.json"},
+        )
+        result = _fetcher().fetch()
+        assert result.status == 302
+        assert not result.is_success
+        assert len(rsps_lib.calls) == 1
+
     def test_is_rate_limited_skips_network(self) -> None:
         fixed_now = 1_000.0
         f = _fetcher(clock=lambda: fixed_now)

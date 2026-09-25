@@ -11,16 +11,15 @@ log = logging.getLogger(__name__)
 
 T = typing.TypeVar("T")
 
-# A fetch is capped at two attempts so it can never outlive the shortest poll
-# interval (providers.md section 2.1): 4s + 0.12s + 4s = 8.12s < 10s. Beyond the
-# single retry, recovery is the next poll tick's job.
+# Two attempts so a fetch cannot outlive the shortest poll interval
+# (providers.md section 2.1): 4s + 0.12s + 4s = 8.12s < 10s. Past that, recovery
+# is the next tick's job.
 MAX_ATTEMPTS = 2
 BASE_DELAY_MS = 100.0
 MAX_JITTER_FACTOR = 0.20
 
-#: Worst-case time spent backing off within one fetch, used to derive the
-#: fetch-duration bound in :mod:`._cdn`. There is one backoff between each pair
-#: of attempts, so this tracks MAX_ATTEMPTS rather than assuming a single retry.
+#: Worst-case backoff within one fetch, used to derive the bound in
+#: :mod:`._cdn`. One backoff per pair of attempts, so it tracks MAX_ATTEMPTS.
 MAX_BACKOFF_S = (
     (MAX_ATTEMPTS - 1) * BASE_DELAY_MS * (1.0 + MAX_JITTER_FACTOR)
 ) / 1000.0

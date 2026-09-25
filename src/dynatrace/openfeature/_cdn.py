@@ -90,30 +90,21 @@ class CdnFetcher:
     def invalidate_cache(self) -> None:
         """Forget the cached validators.
 
-        The validators are stored as soon as a 2xx arrives, before the caller
-        has had a chance to apply the body. When applying it fails, the cached
-        ETag/Last-Modified describe a config the provider never loaded, and the
-        next conditional request would come back 304 -- which reads as "your
-        copy is current" and would quietly confirm an empty flag store. Dropping
-        them forces the next fetch to ask for the full body again.
+        They are stored as soon as a 2xx arrives, before the caller applies the
+        body. If applying it fails they describe a config we never loaded, and
+        the next conditional request would come back 304 over an empty store.
         """
         self._cache = _CacheState()
 
     def fetch(self, cancel: threading.Event | None = None) -> FetchResult:
-        """Fetch the config, or return a skipped result without making a request.
+        """Fetch the config, or skip without making a request.
 
-        A skip means no request was made, either because a fetch is already in
-        flight (providers.md section 2.1.1) or because a Retry-After window is
-        open (section 2.3). It is neither a success nor a failure: the caller
-        learned nothing and must report nothing.
-
-        :class:`PollingManager` already serialises its own fetches, so the
-        in-flight guard is defence in depth for callers outside it, namely
-        :meth:`DynatraceProvider.initialize` fetching on the caller's thread. It
-        is also what keeps the cached validators coherent: a conditional request
-        reads them before sending and stores the new pair afterwards, so two
-        interleaved fetches could leave an ETag and a Last-Modified behind that
-        came from different responses.
+        A skip (fetch in flight, section 2.1.1; or an open Retry-After window,
+        section 2.3) is neither success nor failure and must not be reported as
+        either. PollingManager serialises its own fetches, so the in-flight
+        guard is for callers outside it -- initialize() fetches on the caller's
+        thread -- and it keeps a conditional request from storing an ETag and a
+        Last-Modified that came from different responses.
         """
         if self.is_rate_limited():
             log.debug("rate limited; skipping fetch")
@@ -140,10 +131,9 @@ class CdnFetcher:
             headers["If-Modified-Since"] = cache.last_modified_header
 
         deadline = time.monotonic() + REQUEST_TIMEOUT_S
-        # urllib3's total covers connect plus time-to-first-byte. A plain float
-        # or (connect, read) tuple would let those two phases each take the full
-        # timeout, doubling the worst case. HTTPAdapter.send hands a urllib3
-        # Timeout straight through; only requests' type stubs are unaware.
+        # total covers connect plus time-to-first-byte as one budget; a float or
+        # (connect, read) tuple would give each phase the full timeout. requests
+        # passes a urllib3 Timeout through, only its stubs are unaware.
         timeout = Urllib3Timeout(
             connect=REQUEST_TIMEOUT_S,
             read=REQUEST_TIMEOUT_S,
@@ -153,8 +143,9 @@ class CdnFetcher:
             self._url,
             headers=headers,
             timeout=timeout,  # type: ignore[arg-type]
-            # The body is read against the same deadline below; see
-            # _read_body_within for why the library cannot bound it for us.
+            # Every hop gets a fresh timeout, so following a chain would blow
+            # the budget. Java's client never follows one either.
+            allow_redirects=False,
             stream=True,
         ) as resp:
             if resp.status_code == 304:
@@ -197,17 +188,11 @@ class CdnFetcher:
 def _read_body_within(resp: requests.Response, deadline: float) -> str:
     """Read the response body, giving up once ``deadline`` passes.
 
-    No timeout the HTTP stack offers bounds this. A float or (connect, read)
-    timeout measures inactivity between socket reads, and urllib3's ``total``
-    only subtracts the connect duration before being applied as the socket's
-    per-read timeout. A server that keeps trickling bytes resets the clock on
-    every one of them, so the fetch runs as long as it likes. That would make
-    MAX_FETCH_DURATION_S a description rather than a bound, and the bound is
-    what keeps two polls from ever being in flight at once.
-
-    Chunking and checking the clock between chunks is not enough either: a read
-    blocks until the full chunk arrives. The deadline has to interrupt the read
-    itself, which is what :meth:`urllib3.HTTPResponse.shutdown` is for.
+    No timeout in the stack bounds this: they all measure inactivity between
+    socket reads, so a server trickling bytes resets the clock on every one and
+    MAX_FETCH_DURATION_S stops being a bound. Checking the clock between chunks
+    is not enough either, since a read blocks until its chunk is full, so the
+    deadline interrupts the read itself via HTTPResponse.shutdown.
     """
     raw = resp.raw
     expired = threading.Event()
@@ -226,7 +211,7 @@ def _read_body_within(resp: requests.Response, deadline: float) -> str:
     try:
         chunks.extend(resp.iter_content(_BODY_CHUNK_BYTES))
     except (requests.RequestException, OSError):
-        # A torn-down socket surfaces as a read error; report it as what it is.
+        # A torn-down socket surfaces as a read error.
         if expired.is_set():
             raise requests.Timeout(_BUDGET_EXCEEDED) from None
         raise
@@ -234,7 +219,7 @@ def _read_body_within(resp: requests.Response, deadline: float) -> str:
         watchdog.cancel()
 
     if expired.is_set():
-        # The body did arrive, just not inside the budget.
+        # Arrived, just not in time.
         raise requests.Timeout(_BUDGET_EXCEEDED)
 
     return b"".join(chunks).decode(resp.encoding or "utf-8", errors="replace")

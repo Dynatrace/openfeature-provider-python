@@ -61,9 +61,8 @@ class DynatraceProvider(AbstractProvider):
         options = DynatraceProviderOptions.from_sdk_key(
             sdk_key, config_origin=config_origin, metrics_origin=metrics_origin
         )
-        # providers.md section 2.1: a poll can never outlive its interval, so two
-        # polls are never in flight at once. The bound is the whole fetch --
-        # every attempt plus the backoff between them -- not one request timeout.
+        # providers.md section 2.1: a poll must not outlive its interval. The
+        # bound is the whole fetch, every attempt plus backoff, not one request.
         if fetcher is None and poll_interval_s <= _MAX_FETCH_DURATION_S:
             raise ValueError(
                 f"poll_interval_s ({poll_interval_s}s) must be greater than the "
@@ -116,9 +115,8 @@ class DynatraceProvider(AbstractProvider):
         try:
             self._flagd_core.set_flags(body)
         except Exception as exc:
-            # Not just ParseError: a body that is not JSON at all surfaces as a
-            # JSONDecodeError, and that must still leave a recoverable provider
-            # rather than escaping initialize() raw.
+            # Not just ParseError: a non-JSON body raises JSONDecodeError, which
+            # must still leave a recoverable provider rather than escape raw.
             self._fail_initialization(generation, f"invalid config: {exc}")
             raise GeneralError(f"initial CDN config is invalid: {exc}") from exc
 
@@ -144,10 +142,9 @@ class DynatraceProvider(AbstractProvider):
     def _fetch_initial_body(self, generation: int) -> str:
         """Fetch the startup config, or fail initialization and raise.
 
-        The initial fetch is bounded like any other (two attempts, ~8s; see
-        providers.md section 2.4). Failing fast surfaces misconfiguration at
-        startup, but it is not terminal: the provider enters ERROR and the
-        polling timer carries it to READY if the failure was transient.
+        Bounded like any other fetch (providers.md section 2.4). Failing is not
+        terminal: the provider enters ERROR and the polling timer carries it to
+        READY if the failure was transient.
         """
         try:
             result = self._fetcher.fetch()
@@ -158,8 +155,7 @@ class DynatraceProvider(AbstractProvider):
             ) from exc
 
         if result.skipped:
-            # Another fetch held the lock, or a Retry-After window was open. No
-            # request was made, so there is no status to report.
+            # No request was made, so there is no status to report.
             self._fail_initialization(generation, "fetch skipped")
             raise GeneralError("initial CDN fetch was skipped; no request was made")
 
@@ -191,24 +187,21 @@ class DynatraceProvider(AbstractProvider):
     def _fail_initialization(self, generation: int, reason: str) -> None:
         """Enter ERROR and start polling so the provider can still recover.
 
-        The caller raises afterwards, so the SDK sees initialization fail and the
-        cause is visible at startup; the polling timer is what brings the
-        provider back (providers.md section 2.4). Auth failures take this path
-        too -- 401/403 are ERROR, never FATAL -- because a rotated token or a
-        service-side fault should not permanently disable the provider. Until a
-        poll succeeds, evaluations fall back to their defaults.
+        The caller raises afterwards, so initialization is still seen to fail;
+        the polling timer is what brings the provider back (section 2.4). Auth
+        failures take this path too, since 401/403 are ERROR and never FATAL.
         """
-        # No config was applied, so any validators cached during this attempt
-        # describe flags the provider does not hold. Leaving them would let the
-        # recovery poll revalidate to 304 and report success over an empty store.
-        self._fetcher.invalidate_cache()
         with self._lock:
             if self._generation != generation:
+                # A newer generation owns the fetcher; its cache is not ours.
                 log.info(
                     "initialize superseded by a concurrent shutdown/initialize; "
                     "not starting recovery poller"
                 )
                 return
+            # Nothing was applied, so validators cached by this attempt would
+            # let the recovery poll 304 its way to READY over an empty store.
+            self._fetcher.invalidate_cache()
             log.warning("initialization failed (%s); polling for recovery", reason)
             self._state = ProviderStatus.ERROR
             self._cancel_grace_timer()
@@ -303,9 +296,8 @@ class DynatraceProvider(AbstractProvider):
         try:
             changed = self._flagd_core.set_flags_and_get_changed_keys(body)
         except Exception:
-            # The body was fetched but not applied, so the validators cached for
-            # it would make the next poll a 304 over the previous config. Drop
-            # them so the next poll pulls the body again.
+            # Fetched but not applied, so its validators would make the next
+            # poll a 304 over the previous config.
             self._fetcher.invalidate_cache()
             raise
         self._update_metrics_version_from_flag_set()
