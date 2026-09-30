@@ -90,7 +90,8 @@ class CdnFetcher:
         body. If applying it fails they describe a config we never loaded, and
         the next conditional request would come back 304 over an empty store.
         """
-        self._cache = _CacheState()
+        with self._fetch_lock:
+            self._cache = _CacheState()
 
     def fetch(self, cancel: threading.Event | None = None) -> FetchResult:
         """Fetch the config, or skip without making a request.
