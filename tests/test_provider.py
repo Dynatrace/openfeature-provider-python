@@ -57,18 +57,18 @@ class TestInitialize:
         assert p._state == ProviderStatus.READY
         p.shutdown()
 
+    @pytest.mark.parametrize(
+        ("status", "body", "match"),
+        [(404, None, "HTTP 404"), (200, "", "empty")],
+        ids=["http-error", "empty-body"],
+    )
     @rsps_lib.activate
-    def test_init_failure_on_404_raises(self) -> None:
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=404)
+    def test_init_failure_raises(
+        self, status: int, body: str | None, match: str
+    ) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=body, status=status)
         p = _make_provider()
-        with pytest.raises(GeneralError, match="HTTP 404"):
-            p.initialize()
-
-    @rsps_lib.activate
-    def test_init_failure_on_empty_body_raises(self) -> None:
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, body="", status=200)
-        p = _make_provider()
-        with pytest.raises(GeneralError, match="empty"):
+        with pytest.raises(GeneralError, match=match):
             p.initialize()
 
     @rsps_lib.activate
@@ -83,8 +83,7 @@ class TestInitialize:
 
     @rsps_lib.activate
     def test_init_failure_enters_error_and_keeps_polling(self) -> None:
-        # providers.md section 2.4: initialization fails fast, but it is not
-        # terminal -- the provider goes to ERROR and the polling timer retries.
+        # providers.md 2.4: init fails fast but is not terminal; provider goes ERROR and the polling timer retries
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=404)
         p = _make_provider()
         with pytest.raises(GeneralError, match="HTTP 404"):
@@ -95,8 +94,7 @@ class TestInitialize:
 
     @rsps_lib.activate
     def test_init_auth_failure_keeps_retrying(self) -> None:
-        # No FATAL state (section 4): a 401 is recoverable, so the provider must
-        # still be polling after it.
+        # no FATAL state (providers.md 4): a 401 is recoverable, so the provider must still be polling after it
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=401)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
         p = _make_provider(poll_s=0.05)
@@ -122,9 +120,7 @@ class TestInitialize:
 
     @rsps_lib.activate
     def test_rejected_init_config_does_not_leave_validators_behind(self) -> None:
-        # The 200 carries validators, but the body never reaches the flag store.
-        # If they survived, the recovery poll would revalidate to 304 and report
-        # success over an empty store.
+        # the 200 carries validators but the body never reaches the store; if they survived the recovery poll would 304 over an empty store
         rsps_lib.add(
             rsps_lib.GET,
             _CDN_URL,
@@ -166,8 +162,7 @@ class TestInitialize:
         while time.monotonic() < deadline and len(rsps_lib.calls) < 3:
             time.sleep(0.02)
         assert len(rsps_lib.calls) >= 3
-        # Second poll re-requests the body instead of revalidating the config
-        # that was rejected.
+        # second poll re-requests the body instead of revalidating the rejected config
         assert rsps_lib.calls[2].request.headers.get("If-None-Match") is None
         p.shutdown()
 
@@ -234,8 +229,7 @@ class TestStateMachine:
     @rsps_lib.activate
     def test_ready_to_stale_on_poll_failure(self) -> None:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
-        # poll_s=2.0 gives the 5-attempt retry cycle (~1.5s) time to complete before
-        # the next tick cancels it; the realistic STALE trigger is exhausted 5xx retries
+        # poll_s=2.0 lets the retry cycle finish before the next tick; the realistic STALE trigger is exhausted 5xx retries
         p = _make_provider(poll_s=2.0, grace_s=60.0)
         p.initialize()
         stale_event = threading.Event()

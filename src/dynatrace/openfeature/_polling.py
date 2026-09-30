@@ -54,11 +54,9 @@ class PollingManager:
         self._ticker_thread.start()
 
     def stop(self) -> None:
-        # The stop event doubles as the cancel signal handed to the fetch, so an
-        # in-flight poll abandons its backoff instead of holding shutdown up.
+        # stop event doubles as the fetch cancel signal, so an in-flight poll abandons its backoff
         self._stop_event.set()
-        # _in_flight is left alone: only _run_poll's finally knows when the
-        # fetch is done, and clearing it here would let a restart double up.
+        # leave _in_flight alone: only _run_poll's finally clears it; clearing here would let a restart double up
         if self._ticker_thread is not None:
             self._ticker_thread.join(timeout=2.0)
 

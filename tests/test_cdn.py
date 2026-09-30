@@ -119,8 +119,7 @@ class TestCdnFetcherResponses:
 
     @rsps_lib.activate
     def test_redirects_are_not_followed(self) -> None:
-        # Each hop would get its own full timeout, so a chain of them would run
-        # past MAX_FETCH_DURATION_S and break the single-flight bound.
+        # each hop gets its own full timeout, so a redirect chain would run past MAX_FETCH_DURATION_S
         rsps_lib.add(
             rsps_lib.GET,
             _CDN_URL,
@@ -137,40 +136,20 @@ class TestCdnFetcherResponses:
         f = _fetcher(clock=lambda: fixed_now)
         f._rate_limited_until = fixed_now + 60.0
         result = f.fetch()
-        # No request leaves the process inside the window, so the caller learned
-        # nothing: a skip, not a 429 the CDN actually sent.
+        # no request leaves the process inside the window: a skip, not a 429 the CDN actually sent
         assert result.skipped
         assert not result.is_rate_limited
 
+    # a second 200 whose Last-Modified is not strictly newer is a stale node; treat it as 304
+    @pytest.mark.parametrize("first_lm", [_LM_OLD, _LM_NEW], ids=["equal", "older"])
     @rsps_lib.activate
-    def test_stale_node_defense_same_last_modified(self) -> None:
+    def test_stale_node_defense_rejects_not_newer(self, first_lm: str) -> None:
         rsps_lib.add(
             rsps_lib.GET,
             _CDN_URL,
             body=_BODY,
             status=200,
-            headers={"Last-Modified": _LM_OLD},
-        )
-        rsps_lib.add(
-            rsps_lib.GET,
-            _CDN_URL,
-            body="new",
-            status=200,
-            headers={"Last-Modified": _LM_OLD},
-        )
-        f = _fetcher()
-        f.fetch()
-        result = f.fetch()
-        assert result.is_not_modified
-
-    @rsps_lib.activate
-    def test_stale_node_defense_older_last_modified(self) -> None:
-        rsps_lib.add(
-            rsps_lib.GET,
-            _CDN_URL,
-            body=_BODY,
-            status=200,
-            headers={"Last-Modified": _LM_NEW},
+            headers={"Last-Modified": first_lm},
         )
         rsps_lib.add(
             rsps_lib.GET,
@@ -211,8 +190,7 @@ class TestCdnFetcherResponses:
 
     @rsps_lib.activate
     def test_gives_up_after_two_attempts(self) -> None:
-        # providers.md section 2.4: a fetch is one attempt plus one retry, so it
-        # cannot outlive the shortest poll interval.
+        # providers.md 2.4: one attempt plus one retry, so a fetch cannot outlive the shortest poll interval
         for _ in range(3):
             rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         f = _fetcher()
@@ -264,9 +242,7 @@ class TestFetchDeadline:
     ) -> None:
         budget = 0.4
         monkeypatch.setattr(cdn, "REQUEST_TIMEOUT_S", budget)
-        # Each chunk lands inside the read timeout but the body as a whole runs
-        # far past the budget, which is exactly the case the socket timeout
-        # cannot catch.
+        # each chunk lands inside the read timeout but the whole body runs past the budget (what the socket timeout can't catch)
         url, srv = self._drip_server(chunk_delay_s=budget / 2, chunks=20)
         f = _fetcher()
         f._url = url

@@ -1,6 +1,8 @@
 import threading
 import time
 
+import pytest
+
 from dynatrace.openfeature._cdn import FetchResult
 from dynatrace.openfeature._polling import PollingManager
 
@@ -39,54 +41,36 @@ def _make_pm(
 
 
 class TestPollingManagerPoll:
-    def test_304_emits_success_only(self) -> None:
-        pm, calls = _make_pm(_304)
+    # a 429 and a single-flight skip emit nothing: neither is an outcome the tick observed
+    @pytest.mark.parametrize(
+        ("result", "changed_keys", "store", "success", "failure", "change"),
+        [
+            (_304, [], [], [True], [], []),
+            (_200, [], ['{"flags":{}}'], [True], [], []),
+            (
+                _200,
+                ["flag-a", "flag-b"],
+                ['{"flags":{}}'],
+                [True],
+                [],
+                [["flag-a", "flag-b"]],
+            ),
+            (_429, [], [], [], [], []),
+            (_SKIPPED, [], [], [], [], []),
+            (_500, [], [], [], ["HTTP 500"], []),
+            (FetchResult(200, "", None, None), [], [], [], ["empty response body"], []),
+        ],
+        ids=["304", "200", "200-changed", "429", "skipped", "500", "empty-body"],
+    )
+    def test_poll_dispatches_by_result(
+        self, result, changed_keys, store, success, failure, change
+    ) -> None:
+        pm, calls = _make_pm(result, changed_keys=changed_keys)
         pm._poll()
-        assert calls["success"] == [True]
-        assert calls["store"] == []
-        assert calls["failure"] == []
-
-    def test_200_stores_and_emits_success(self) -> None:
-        pm, calls = _make_pm(_200)
-        pm._poll()
-        assert calls["store"] == ['{"flags":{}}']
-        assert calls["success"] == [True]
-        assert calls["failure"] == []
-
-    def test_200_emits_change_on_diff(self) -> None:
-        pm, calls = _make_pm(_200, changed_keys=["flag-a", "flag-b"])
-        pm._poll()
-        assert calls["change"] == [["flag-a", "flag-b"]]
-
-    def test_200_no_change_no_change_event(self) -> None:
-        pm, calls = _make_pm(_200, changed_keys=[])
-        pm._poll()
-        assert calls["change"] == []
-
-    def test_429_emits_nothing(self) -> None:
-        pm, calls = _make_pm(_429)
-        pm._poll()
-        assert calls["success"] == []
-        assert calls["failure"] == []
-
-    def test_skipped_fetch_emits_nothing(self) -> None:
-        # A single-flight skip is neither a success nor a failure: reporting it
-        # as either would lie about an outcome the tick never observed.
-        pm, calls = _make_pm(_SKIPPED)
-        pm._poll()
-        assert calls["success"] == []
-        assert calls["failure"] == []
-        assert calls["store"] == []
-
-    def test_500_emits_failure(self) -> None:
-        pm, calls = _make_pm(_500)
-        pm._poll()
-        assert calls["failure"] == ["HTTP 500"]
-
-    def test_empty_body_emits_failure(self) -> None:
-        pm, calls = _make_pm(FetchResult(200, "", None, None))
-        pm._poll()
-        assert calls["failure"] == ["empty response body"]
+        assert calls["store"] == store
+        assert calls["success"] == success
+        assert calls["failure"] == failure
+        assert calls["change"] == change
 
     def test_exception_emits_failure(self) -> None:
         def boom(cancel=None):
@@ -117,8 +101,7 @@ class TestPollingManagerPoll:
 
 class TestPollingManagerSingleFlight:
     def test_tick_during_in_flight_fetch_is_skipped(self) -> None:
-        # providers.md section 2.1.1: the contended tick is skipped outright --
-        # the in-flight fetch is neither cancelled nor joined by a second one.
+        # providers.md 2.1.1: the contended tick is skipped outright; the in-flight fetch is neither cancelled nor joined
         first_started = threading.Event()
         release = threading.Event()
         calls: list[str] = []

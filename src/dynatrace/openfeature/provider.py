@@ -61,8 +61,7 @@ class DynatraceProvider(AbstractProvider):
         options = DynatraceProviderOptions.from_sdk_key(
             sdk_key, config_origin=config_origin, metrics_origin=metrics_origin
         )
-        # providers.md section 2.1: a poll must not outlive its interval. The
-        # bound is the whole fetch, every attempt plus backoff, not one request.
+        # providers.md 2.1: a poll must not outlive its interval; the bound is the whole fetch, not one request
         if fetcher is None and poll_interval_s <= _MAX_FETCH_DURATION_S:
             raise ValueError(
                 f"poll_interval_s ({poll_interval_s}s) must be greater than the "
@@ -115,19 +114,16 @@ class DynatraceProvider(AbstractProvider):
         try:
             self._flagd_core.set_flags(body)
         except Exception as exc:
-            # Not just ParseError: a non-JSON body raises JSONDecodeError, which
-            # must still leave a recoverable provider rather than escape raw.
+            # not just ParseError: a non-JSON body raises JSONDecodeError, which must still leave a recoverable provider
             self._fail_initialization(generation, f"invalid config: {exc}")
             raise GeneralError(f"initial CDN config is invalid: {exc}") from exc
 
-        # Set the aggregator version eagerly so it is authoritative before any
-        # evaluation is recorded.
+        # set the aggregator version eagerly so it is authoritative before any evaluation is recorded
         self._update_metrics_version_from_flag_set()
 
         with self._lock:
             if self._generation != generation:
-                # A concurrent shutdown() or re-initialize() superseded us while
-                # the fetch was in flight; do not resurrect the provider.
+                # a concurrent shutdown/re-initialize superseded us mid-fetch; do not resurrect the provider
                 log.info(
                     "initialize superseded by a concurrent shutdown/initialize; "
                     "not starting poller"
@@ -199,8 +195,7 @@ class DynatraceProvider(AbstractProvider):
                     "not starting recovery poller"
                 )
                 return
-            # Nothing was applied, so validators cached by this attempt would
-            # let the recovery poll 304 its way to READY over an empty store.
+            # nothing was applied, so cached validators would let the recovery poll 304 its way to READY over an empty store
             self._fetcher.invalidate_cache()
             log.warning("initialization failed (%s); polling for recovery", reason)
             self._state = ProviderStatus.ERROR
@@ -210,8 +205,7 @@ class DynatraceProvider(AbstractProvider):
 
     def shutdown(self) -> None:
         with self._lock:
-            # Always bump the generation, even when already idle, so an
-            # in-flight initialize() detects it was superseded and aborts.
+            # always bump the generation, even when idle, so an in-flight initialize detects it was superseded
             self._generation += 1
             already_idle = (
                 self._state == ProviderStatus.NOT_READY and self._poller is None
@@ -223,10 +217,7 @@ class DynatraceProvider(AbstractProvider):
                 if self._poller is not None:
                     self._poller.stop()
                     self._poller = None
-        # Always release the flusher (and the session it owns), even when the
-        # provider never finished initializing: the flusher's session is created
-        # in __init__, so an early return here would otherwise leak it.
-        # flusher.shutdown() is idempotent and safe when never started.
+        # always release the flusher and its session (created in __init__), even if init never finished; shutdown() is idempotent
         try:
             self._metrics_flusher.shutdown()
         except Exception as exc:
@@ -287,17 +278,14 @@ class DynatraceProvider(AbstractProvider):
         )
 
     def _store_flags(self, body: str) -> list[str]:
-        # Seal the old-version batch and enqueue/trigger its flush BEFORE applying
-        # the new config and bumping the version, so pre-rotation counts are
-        # flushed under the old version.
+        # seal + enqueue + flush the old-version batch before applying the new config, so pre-rotation counts flush under the old version
         sealed = self._metrics_aggregator.drain()
         self._metrics_flusher.enqueue_sealed_batch(sealed)
         self._metrics_flusher.trigger_flush()
         try:
             changed = self._flagd_core.set_flags_and_get_changed_keys(body)
         except Exception:
-            # Fetched but not applied, so its validators would make the next
-            # poll a 304 over the previous config.
+            # fetched but not applied, so its validators would make the next poll a 304 over the previous config
             self._fetcher.invalidate_cache()
             raise
         self._update_metrics_version_from_flag_set()

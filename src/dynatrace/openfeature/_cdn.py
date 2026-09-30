@@ -23,11 +23,7 @@ log = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_S: float = 4.0
 
-#: Worst case wall time of a single fetch: every attempt timing out, plus the
-#: backoff between them. providers.md section 2.1 makes it an invariant that this
-#: stays below the shortest poll interval, so two polls can never be in flight at
-#: once. Any change to the timeout, the attempt count or the backoff must
-#: preserve it; :class:`DynatraceProvider` asserts it at construction.
+#: worst-case wall time of a fetch (all attempts + backoff); stays under the shortest poll interval so two polls never overlap (providers.md 2.1); asserted in DynatraceProvider
 MAX_FETCH_DURATION_S: float = REQUEST_TIMEOUT_S * MAX_ATTEMPTS + MAX_BACKOFF_S
 
 _DEFAULT_RETRY_AFTER_MS: float = 60_000.0
@@ -131,9 +127,7 @@ class CdnFetcher:
             headers["If-Modified-Since"] = cache.last_modified_header
 
         deadline = time.monotonic() + REQUEST_TIMEOUT_S
-        # total covers connect plus time-to-first-byte as one budget; a float or
-        # (connect, read) tuple would give each phase the full timeout. requests
-        # passes a urllib3 Timeout through, only its stubs are unaware.
+        # total bounds connect + time-to-first-byte as one budget (a tuple would give each phase the full timeout)
         timeout = Urllib3Timeout(
             connect=REQUEST_TIMEOUT_S,
             read=REQUEST_TIMEOUT_S,
@@ -143,8 +137,7 @@ class CdnFetcher:
             self._url,
             headers=headers,
             timeout=timeout,  # type: ignore[arg-type]
-            # Every hop gets a fresh timeout, so following a chain would blow
-            # the budget. Java's client never follows one either.
+            # each hop gets a fresh timeout, so following a chain would blow the budget (Java never follows one either)
             allow_redirects=False,
             stream=True,
         ) as resp:

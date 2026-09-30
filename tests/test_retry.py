@@ -19,13 +19,22 @@ def _seeded_retry() -> RetryStrategy:
 
 
 class TestDefaultShouldRetryStatus:
-    def test_5xx_retryable(self) -> None:
-        for s in (500, 502, 503, 599):
-            assert default_should_retry_status(s)
-
-    def test_non_5xx_not_retryable(self) -> None:
-        for s in (200, 304, 400, 404, 429):
-            assert not default_should_retry_status(s)
+    @pytest.mark.parametrize(
+        ("status", "retryable"),
+        [
+            (500, True),
+            (502, True),
+            (503, True),
+            (599, True),
+            (200, False),
+            (304, False),
+            (400, False),
+            (404, False),
+            (429, False),
+        ],
+    )
+    def test_only_5xx_is_retryable(self, status: int, retryable: bool) -> None:
+        assert default_should_retry_status(status) is retryable
 
 
 class TestRetryStrategyExecute:
@@ -58,8 +67,7 @@ class TestRetryStrategyExecute:
 
     @patch(_SLEEP)
     def test_stops_after_two_attempts(self, _mock_sleep: object) -> None:
-        # providers.md section 2.4: one retry, not a loop -- the bound exists so a
-        # fetch cannot outlive the shortest poll interval.
+        # providers.md 2.4: one retry, not a loop, so a fetch cannot outlive the shortest poll interval
         calls = 0
 
         def fn() -> int:
@@ -70,14 +78,6 @@ class TestRetryStrategyExecute:
         result = _seeded_retry().execute(fn, should_retry=default_should_retry_status)
         assert result == 500
         assert calls == 2
-
-    @patch(_SLEEP)
-    def test_exhausts_attempts_returns_last_result(self, _mock_sleep: object) -> None:
-        def fn() -> int:
-            return 503
-
-        result = _seeded_retry().execute(fn, should_retry=default_should_retry_status)
-        assert result == 503
 
     @patch(_SLEEP)
     def test_retries_on_exception_then_succeeds(self, _mock_sleep: object) -> None:
