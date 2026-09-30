@@ -273,6 +273,7 @@ dependencies = [
     { name = "openfeature-flagd-core" },
     { name = "openfeature-sdk" },
     { name = "requests" },
+    { name = "urllib3" },
 ]
 
 [package.dev-dependencies]
@@ -292,6 +293,7 @@ requires-dist = [
     { name = "openfeature-flagd-core", specifier = ">=1.0.0,<2.0.0" },
     { name = "openfeature-sdk", specifier = ">=0.8.2" },
     { name = "requests", specifier = ">=2.27.0" },
+    { name = "urllib3", specifier = ">=2.3.0" },
 ]
 
 [package.metadata.requires-dev]

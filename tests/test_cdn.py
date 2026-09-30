@@ -1,8 +1,18 @@
+import socket
+import threading
+import time
 from random import Random
 
+import pytest
+import requests
 import responses as rsps_lib
 
-from dynatrace.openfeature._cdn import CdnFetcher, _parse_retry_after_ms
+from dynatrace.openfeature import _cdn as cdn
+from dynatrace.openfeature._cdn import (
+    MAX_FETCH_DURATION_S,
+    CdnFetcher,
+    _parse_retry_after_ms,
+)
 from dynatrace.openfeature._retry import RetryStrategy
 from dynatrace.openfeature.options import DynatraceProviderOptions
 
@@ -12,6 +22,7 @@ _BODY = '{"flags":{}}'
 _ETAG = '"abc123"'
 _LM_OLD = "Thu, 01 May 2025 00:00:00 GMT"
 _LM_NEW = "Fri, 02 May 2025 00:00:00 GMT"
+_SHORTEST_POLL_INTERVAL_S = 10.0  # providers.md section 2.1 (SSE disconnected)
 
 
 def _fast_retry() -> RetryStrategy:
@@ -106,42 +117,39 @@ class TestCdnFetcherResponses:
         assert f.is_rate_limited(now=fixed_now + 59)
         assert not f.is_rate_limited(now=fixed_now + 61)
 
+    @rsps_lib.activate
+    def test_redirects_are_not_followed(self) -> None:
+        # each hop gets its own full timeout, so a redirect chain would run past MAX_FETCH_DURATION_S
+        rsps_lib.add(
+            rsps_lib.GET,
+            _CDN_URL,
+            status=302,
+            headers={"Location": "https://elsewhere.example/config.json"},
+        )
+        result = _fetcher().fetch()
+        assert result.status == 302
+        assert not result.is_success
+        assert len(rsps_lib.calls) == 1
+
     def test_is_rate_limited_skips_network(self) -> None:
         fixed_now = 1_000.0
         f = _fetcher(clock=lambda: fixed_now)
         f._rate_limited_until = fixed_now + 60.0
         result = f.fetch()
-        assert result.is_rate_limited
+        # no request leaves the process inside the window: a skip, not a 429 the CDN actually sent
+        assert result.skipped
+        assert not result.is_rate_limited
 
+    # a second 200 whose Last-Modified is not strictly newer is a stale node; treat it as 304
+    @pytest.mark.parametrize("first_lm", [_LM_OLD, _LM_NEW], ids=["equal", "older"])
     @rsps_lib.activate
-    def test_stale_node_defense_same_last_modified(self) -> None:
+    def test_stale_node_defense_rejects_not_newer(self, first_lm: str) -> None:
         rsps_lib.add(
             rsps_lib.GET,
             _CDN_URL,
             body=_BODY,
             status=200,
-            headers={"Last-Modified": _LM_OLD},
-        )
-        rsps_lib.add(
-            rsps_lib.GET,
-            _CDN_URL,
-            body="new",
-            status=200,
-            headers={"Last-Modified": _LM_OLD},
-        )
-        f = _fetcher()
-        f.fetch()
-        result = f.fetch()
-        assert result.is_not_modified
-
-    @rsps_lib.activate
-    def test_stale_node_defense_older_last_modified(self) -> None:
-        rsps_lib.add(
-            rsps_lib.GET,
-            _CDN_URL,
-            body=_BODY,
-            status=200,
-            headers={"Last-Modified": _LM_NEW},
+            headers={"Last-Modified": first_lm},
         )
         rsps_lib.add(
             rsps_lib.GET,
@@ -174,9 +182,89 @@ class TestCdnFetcherResponses:
     @rsps_lib.activate
     def test_retries_on_500(self) -> None:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_BODY, status=200)
         f = _fetcher()
         result = f.fetch()
         assert result.is_success
-        assert len(rsps_lib.calls) == 3
+        assert len(rsps_lib.calls) == 2
+
+    @rsps_lib.activate
+    def test_gives_up_after_two_attempts(self) -> None:
+        # providers.md 2.4: one attempt plus one retry, so a fetch cannot outlive the shortest poll interval
+        for _ in range(3):
+            rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        f = _fetcher()
+        result = f.fetch()
+        assert result.status == 500
+        assert len(rsps_lib.calls) == 2
+
+    def test_max_fetch_duration_stays_under_shortest_poll_interval(self) -> None:
+        # The invariant the two-attempt cap exists to preserve.
+        assert MAX_FETCH_DURATION_S < _SHORTEST_POLL_INTERVAL_S
+
+
+class TestFetchDeadline:
+    """The body read must respect the fetch budget.
+
+    No timeout requests or urllib3 offers bounds it: they all measure
+    inactivity between socket reads, so a server that trickles bytes can stretch
+    a fetch indefinitely and MAX_FETCH_DURATION_S stops being a real bound.
+    """
+
+    @staticmethod
+    def _drip_server(chunk_delay_s: float, chunks: int) -> tuple[str, socket.socket]:
+        srv = socket.socket()
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(8)
+
+        def serve() -> None:
+            while True:
+                try:
+                    conn, _ = srv.accept()
+                except OSError:
+                    return
+                conn.recv(4096)
+                conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % chunks)
+                for _ in range(chunks):
+                    time.sleep(chunk_delay_s)
+                    try:
+                        conn.sendall(b"x")
+                    except OSError:
+                        break
+                conn.close()
+
+        threading.Thread(target=serve, daemon=True).start()
+        return f"http://127.0.0.1:{srv.getsockname()[1]}/", srv
+
+    def test_slow_body_is_cut_off_at_the_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        budget = 0.4
+        monkeypatch.setattr(cdn, "REQUEST_TIMEOUT_S", budget)
+        # each chunk lands inside the read timeout but the whole body runs past the budget (what the socket timeout can't catch)
+        url, srv = self._drip_server(chunk_delay_s=budget / 2, chunks=20)
+        f = _fetcher()
+        f._url = url
+        try:
+            started = time.monotonic()
+            with pytest.raises(requests.Timeout):
+                f._do_fetch()
+            elapsed = time.monotonic() - started
+        finally:
+            srv.close()
+        assert elapsed < budget * 3, (
+            f"body read ran {elapsed:.2f}s past a {budget}s budget"
+        )
+
+    def test_prompt_body_is_returned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(cdn, "REQUEST_TIMEOUT_S", 4.0)
+        url, srv = self._drip_server(chunk_delay_s=0.0, chunks=5)
+        f = _fetcher()
+        f._url = url
+        try:
+            result = f._do_fetch()
+        finally:
+            srv.close()
+        assert result.status == 200
+        assert result.body == "xxxxx"

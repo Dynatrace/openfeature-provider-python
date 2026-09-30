@@ -11,12 +11,12 @@ import requests
 from openfeature.contrib.tools.flagd.core import FlagdCore
 from openfeature.evaluation_context import EvaluationContext
 from openfeature.event import ProviderEventDetails
-from openfeature.exception import GeneralError, ParseError
+from openfeature.exception import GeneralError
 from openfeature.flag_evaluation import FlagResolutionDetails, FlagValueType
 from openfeature.hook import Hook
 from openfeature.provider import AbstractProvider, Metadata, ProviderStatus
 
-from ._cdn import REQUEST_TIMEOUT_S as _REQUEST_TIMEOUT_S
+from ._cdn import MAX_FETCH_DURATION_S as _MAX_FETCH_DURATION_S
 from ._cdn import CdnFetcher
 from ._metrics_aggregator import (
     HARD_CAP_DISTINCT_FLAGS,
@@ -61,10 +61,11 @@ class DynatraceProvider(AbstractProvider):
         options = DynatraceProviderOptions.from_sdk_key(
             sdk_key, config_origin=config_origin, metrics_origin=metrics_origin
         )
-        if fetcher is None and poll_interval_s <= _REQUEST_TIMEOUT_S:
+        # providers.md 2.1: a poll must not outlive its interval; the bound is the whole fetch, not one request
+        if fetcher is None and poll_interval_s <= _MAX_FETCH_DURATION_S:
             raise ValueError(
                 f"poll_interval_s ({poll_interval_s}s) must be greater than the "
-                f"request timeout ({_REQUEST_TIMEOUT_S}s)"
+                f"maximum fetch duration ({_MAX_FETCH_DURATION_S:.2f}s)"
             )
         if metrics_flush_interval_s <= 0:
             raise ValueError(
@@ -108,58 +109,103 @@ class DynatraceProvider(AbstractProvider):
             self._generation += 1
             generation = self._generation
 
-        try:
-            result = self._fetcher.fetch()
-        except (OSError, requests.RequestException) as exc:
-            raise GeneralError(
-                f"initial CDN fetch failed: {type(exc).__name__}"
-            ) from exc
-
-        if not result.is_success:
-            raise GeneralError(f"initial CDN fetch returned HTTP {result.status}")
-
-        body = result.body
-        if not body or not body.strip():
-            raise GeneralError("initial CDN response body was empty")
+        body = self._fetch_initial_body(generation)
 
         try:
             self._flagd_core.set_flags(body)
-        except ParseError as exc:
+        except Exception as exc:
+            # not just ParseError: a non-JSON body raises JSONDecodeError, which must still leave a recoverable provider
+            self._fail_initialization(generation, f"invalid config: {exc}")
             raise GeneralError(f"initial CDN config is invalid: {exc}") from exc
 
-        # Set the aggregator version eagerly so it is authoritative before any
-        # evaluation is recorded.
+        # set the aggregator version eagerly so it is authoritative before any evaluation is recorded
         self._update_metrics_version_from_flag_set()
 
         with self._lock:
             if self._generation != generation:
-                # A concurrent shutdown() or re-initialize() superseded us while
-                # the fetch was in flight; do not resurrect the provider.
+                # a concurrent shutdown/re-initialize superseded us mid-fetch; do not resurrect the provider
                 log.info(
                     "initialize superseded by a concurrent shutdown/initialize; "
                     "not starting poller"
                 )
                 return
             self._cancel_grace_timer()
-            if self._poller is not None:
-                self._poller.stop()
             self._state = ProviderStatus.READY
-            self._poller = PollingManager(
-                fetch_flags=self._fetcher.fetch,
-                store_flags=self._store_flags,
-                emit_change=self._on_configuration_changed,
-                emit_success=self._on_fetch_success,
-                emit_failure=self._on_fetch_failure,
-                interval_s=self._poll_interval_s,
-            )
-            self._poller.start()
+            self._start_poller_locked()
         self._metrics_flusher.start()
         log.info("Dynatrace provider initialized successfully")
 
+    def _fetch_initial_body(self, generation: int) -> str:
+        """Fetch the startup config, or fail initialization and raise.
+
+        Bounded like any other fetch (providers.md section 2.4). Failing is not
+        terminal: the provider enters ERROR and the polling timer carries it to
+        READY if the failure was transient.
+        """
+        try:
+            result = self._fetcher.fetch()
+        except (OSError, requests.RequestException) as exc:
+            self._fail_initialization(generation, f"fetch failed: {type(exc).__name__}")
+            raise GeneralError(
+                f"initial CDN fetch failed: {type(exc).__name__}"
+            ) from exc
+
+        if result.skipped:
+            # No request was made, so there is no status to report.
+            self._fail_initialization(generation, "fetch skipped")
+            raise GeneralError("initial CDN fetch was skipped; no request was made")
+
+        if not result.is_success:
+            self._fail_initialization(generation, f"HTTP {result.status}")
+            raise GeneralError(f"initial CDN fetch returned HTTP {result.status}")
+
+        body = result.body
+        if not body or not body.strip():
+            self._fail_initialization(generation, "empty response body")
+            raise GeneralError("initial CDN response body was empty")
+
+        return body
+
+    def _start_poller_locked(self) -> None:
+        """Replace any existing poller with a fresh one. Caller holds ``_lock``."""
+        if self._poller is not None:
+            self._poller.stop()
+        self._poller = PollingManager(
+            fetch_flags=self._fetcher.fetch,
+            store_flags=self._store_flags,
+            emit_change=self._on_configuration_changed,
+            emit_success=self._on_fetch_success,
+            emit_failure=self._on_fetch_failure,
+            interval_s=self._poll_interval_s,
+        )
+        self._poller.start()
+
+    def _fail_initialization(self, generation: int, reason: str) -> None:
+        """Enter ERROR and start polling so the provider can still recover.
+
+        The caller raises afterwards, so initialization is still seen to fail;
+        the polling timer is what brings the provider back (section 2.4). Auth
+        failures take this path too, since 401/403 are ERROR and never FATAL.
+        """
+        with self._lock:
+            if self._generation != generation:
+                # A newer generation owns the fetcher; its cache is not ours.
+                log.info(
+                    "initialize superseded by a concurrent shutdown/initialize; "
+                    "not starting recovery poller"
+                )
+                return
+            # nothing was applied, so cached validators would let the recovery poll 304 its way to READY over an empty store
+            self._fetcher.invalidate_cache()
+            log.warning("initialization failed (%s); polling for recovery", reason)
+            self._state = ProviderStatus.ERROR
+            self._cancel_grace_timer()
+            self._start_poller_locked()
+        self._metrics_flusher.start()
+
     def shutdown(self) -> None:
         with self._lock:
-            # Always bump the generation, even when already idle, so an
-            # in-flight initialize() detects it was superseded and aborts.
+            # always bump the generation, even when idle, so an in-flight initialize detects it was superseded
             self._generation += 1
             already_idle = (
                 self._state == ProviderStatus.NOT_READY and self._poller is None
@@ -171,10 +217,7 @@ class DynatraceProvider(AbstractProvider):
                 if self._poller is not None:
                     self._poller.stop()
                     self._poller = None
-        # Always release the flusher (and the session it owns), even when the
-        # provider never finished initializing: the flusher's session is created
-        # in __init__, so an early return here would otherwise leak it.
-        # flusher.shutdown() is idempotent and safe when never started.
+        # always release the flusher and its session (created in __init__), even if init never finished; shutdown() is idempotent
         try:
             self._metrics_flusher.shutdown()
         except Exception as exc:
@@ -235,13 +278,16 @@ class DynatraceProvider(AbstractProvider):
         )
 
     def _store_flags(self, body: str) -> list[str]:
-        # Seal the old-version batch and enqueue/trigger its flush BEFORE applying
-        # the new config and bumping the version, so pre-rotation counts are
-        # flushed under the old version.
+        # seal + enqueue + flush the old-version batch before applying the new config, so pre-rotation counts flush under the old version
         sealed = self._metrics_aggregator.drain()
         self._metrics_flusher.enqueue_sealed_batch(sealed)
         self._metrics_flusher.trigger_flush()
-        changed = self._flagd_core.set_flags_and_get_changed_keys(body)
+        try:
+            changed = self._flagd_core.set_flags_and_get_changed_keys(body)
+        except Exception:
+            # fetched but not applied, so its validators would make the next poll a 304 over the previous config
+            self._fetcher.invalidate_cache()
+            raise
         self._update_metrics_version_from_flag_set()
         return changed
 
