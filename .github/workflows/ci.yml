@@ -44,6 +44,21 @@ jobs:
               if: matrix.python-version == '3.13'
               run: uv run ruff check src tests
 
+    e2e:
+        name: E2E Tests
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+            - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+              with:
+                  python-version: "3.13"
+                  enable-cache: true
+
+            - run: uv sync --locked
+
+            - run: uv run poe e2e
+
     pre-commit:
         name: pre-commit
         runs-on: ubuntu-latest
