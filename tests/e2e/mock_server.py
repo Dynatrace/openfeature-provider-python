@@ -1,7 +1,7 @@
 """Client for the containerized mock server from fm-provider-test-harness.
 
 The mock emulates every component the provider talks to (CDN config endpoint, SSE and
-metrics ingest) and exposes an HTTP control plane to set CDN responses and inspect requests.
+metrics ingest) and exposes an HTTP control plane to program its behaviour.
 """
 
 from __future__ import annotations
