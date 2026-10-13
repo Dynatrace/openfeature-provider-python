@@ -127,7 +127,7 @@ def _the_cdn_serves_the_flag_configuration(scenario: Scenario, name: str) -> Non
 @step(
     parsers.re(
         r'an initialized, READY provider serving the "(?P<name>[^"]+)" flag configuration'
-        r'(?: with "(?P<header>[^"]+)" header "(?P<value>[^"]*)")?$'
+        r'(?: with "(?P<header>[^"]+)" header "(?P<value>[^"]*)")?'
     )
 )
 def _an_initialized_ready_provider_serving_the_flag_configuration(
@@ -181,7 +181,7 @@ def _the_cdn_responds_with_status(scenario: Scenario, status: int) -> None:
 # unquoted null in the outline means no body at all, unlike the empty string
 @step(
     parsers.re(
-        r'the CDN responds with status (?P<status>\d+) and body (?P<body>"[^"]*"|null)$'
+        r'the CDN responds with status (?P<status>\d+) and body (?P<body>"[^"]*"|null)'
     ),
     converters={"status": int},
 )

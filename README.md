@@ -61,7 +61,7 @@ The shared [provider test harness](https://github.com/Dynatrace/fm-provider-test
 uv run poe e2e
 ```
 
-This initializes the `fm-provider-test-harness` submodule and runs the suite with pytest-bdd. Set `MOCKSERVER_IMAGE` to use a locally built mock server image.
+This initializes the `fm-provider-test-harness` submodule and runs the suite with pytest-bdd. Set `SKIP_HARNESS_UPDATE=1` to keep a local harness checkout, and `MOCKSERVER_IMAGE` to use a locally built mock server image.
 
 ## Contributing
 

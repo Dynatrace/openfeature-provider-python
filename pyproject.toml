@@ -51,8 +51,8 @@ namespace = true
 omit = ["tests/**"]
 
 [tool.mypy]
-mypy_path = "src"
-files = "src"
+mypy_path = ["src", "tests/e2e"]
+files = ["src", "tests/e2e"]
 python_version = "3.10"
 namespace_packages = true
 explicit_package_bases = true
@@ -111,4 +111,4 @@ cov = ["test-cov", "cov-report"]
 mypy = "mypy"
 lint = "ruff check src tests"
 fmt = "ruff format src tests"
-e2e = { sequence = ["git submodule update --init fm-provider-test-harness", "pytest tests/e2e"], default_item_type = "cmd" }
+e2e = { sequence = [{ shell = "[ -n \"$SKIP_HARNESS_UPDATE\" ] || git submodule update --init fm-provider-test-harness" }, "pytest tests/e2e"], default_item_type = "cmd" }
