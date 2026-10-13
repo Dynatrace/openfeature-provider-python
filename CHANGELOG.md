@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.1](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.2.0...v0.2.1) (2026-10-13)
+
+
+### 🐛 Bug Fixes
+
+* bound CDN fetch duration and skip contended poll ticks ([#24](https://github.com/Dynatrace/openfeature-provider-python/issues/24)) ([ccc4e80](https://github.com/Dynatrace/openfeature-provider-python/commit/ccc4e8052f704e3620db036eb34b917d3e6d5807))
+
+
+### 📚 Documentation
+
+* align README with the standard provider format ([#22](https://github.com/Dynatrace/openfeature-provider-python/issues/22)) ([8ec3621](https://github.com/Dynatrace/openfeature-provider-python/commit/8ec36219b04e019c041ae35b49c3327538180619))
+
 ## [0.2.0](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.1.1...v0.2.0) (2026-08-27)
 
 
