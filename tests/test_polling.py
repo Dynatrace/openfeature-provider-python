@@ -245,3 +245,222 @@ class TestPollingManagerThreading:
         t0 = time.monotonic()
         pm.stop()
         assert time.monotonic() - t0 < 0.5, "stop() should return promptly"
+
+
+_LONG_INTERVAL = 600.0
+_LM_HEADER = "Tue, 02 Jan 2024 00:00:00 GMT"
+# _LM_HEADER as epoch seconds
+_LM_EPOCH = 1704153600
+
+
+def _wait_until(condition, timeout: float = 1.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.01)
+    return condition()
+
+
+class _GatedFetch:
+    """Fetch stub whose first call blocks until released; later calls walk ``results``."""
+
+    def __init__(self, results: list[FetchResult]) -> None:
+        self._results = results
+        self.calls = 0
+        self.first_started = threading.Event()
+        self.release = threading.Event()
+        self._lock = threading.Lock()
+
+    def __call__(self, cancel: threading.Event | None = None) -> FetchResult:
+        with self._lock:
+            self.calls += 1
+            n = self.calls
+        if n == 1:
+            self.first_started.set()
+            self.release.wait(2.0)
+        return self._results[min(n, len(self._results)) - 1]
+
+
+class TestPollingManagerSetInterval:
+    def test_set_interval_re_anchors_the_ticker(self) -> None:
+        fired = threading.Event()
+        pm, _ = _make_pm(
+            fetch_fn=lambda cancel=None: (_304, fired.set())[0],
+            interval_s=_LONG_INTERVAL,
+        )
+        pm.start()
+        try:
+            pm.set_interval(_FAST_INTERVAL)
+            # the new cadence counts from now, not from the old 10-minute tick
+            assert fired.wait(timeout=1.0), "ticker did not adopt the new interval"
+            assert pm.interval_s == _FAST_INTERVAL
+        finally:
+            pm.stop()
+
+    def test_slowing_down_postpones_the_next_tick(self) -> None:
+        calls: list[int] = []
+        pm, _ = _make_pm(
+            fetch_fn=lambda cancel=None: (_304, calls.append(1))[0],
+            interval_s=_FAST_INTERVAL,
+        )
+        pm.start()
+        try:
+            pm.set_interval(_LONG_INTERVAL)
+            time.sleep(_FAST_INTERVAL * 4)
+            assert calls == []
+        finally:
+            pm.stop()
+
+    def test_unchanged_interval_does_not_re_anchor(self) -> None:
+        pm, _ = _make_pm(interval_s=_LONG_INTERVAL)
+        pm.set_interval(_LONG_INTERVAL)
+        assert pm._rescheduled is False
+
+
+class TestPollingManagerSseRefetch:
+    def test_free_slot_fetches_immediately(self) -> None:
+        fetch = _GatedFetch([_304])
+        fetch.release.set()
+        pm, calls = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
+        pm.start()
+        try:
+            pm.trigger_immediate_fetch(_LM_EPOCH)
+            assert _wait_until(lambda: calls["success"] == [True])
+            assert fetch.calls == 1
+        finally:
+            pm.stop()
+
+    def test_contended_refetches_are_deferred_and_coalesced(self) -> None:
+        fetch = _GatedFetch([_304])
+        pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
+        pm.start()
+        try:
+            pm.trigger_immediate_fetch(None)
+            assert fetch.first_started.wait(1.0)
+            pm.trigger_immediate_fetch(_LM_EPOCH)
+            pm.trigger_immediate_fetch(_LM_EPOCH + 60)
+            assert fetch.calls == 1, "a contended re-fetch must not overlap"
+            fetch.release.set()
+            assert _wait_until(lambda: fetch.calls == 2)
+            time.sleep(0.1)
+            assert fetch.calls == 2, "deferred re-fetches must coalesce into one"
+        finally:
+            pm.stop()
+
+    def test_deferred_refetch_dropped_when_completed_fetch_is_as_new(self) -> None:
+        fresh = FetchResult(200, '{"flags":{}}', None, _LM_HEADER)
+        fetch = _GatedFetch([fresh, _304])
+        pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
+        pm.start()
+        try:
+            pm.trigger_immediate_fetch(None)
+            assert fetch.first_started.wait(1.0)
+            pm.trigger_immediate_fetch(_LM_EPOCH)
+            fetch.release.set()
+            time.sleep(0.2)
+            assert fetch.calls == 1
+        finally:
+            pm.stop()
+
+    @pytest.mark.parametrize(
+        ("completed_last_modified", "announced"),
+        [
+            ("Mon, 01 Jan 2024 00:00:00 GMT", _LM_EPOCH),
+            (None, _LM_EPOCH),
+            # an announcement without lastModified is never dropped
+            (_LM_HEADER, None),
+        ],
+        ids=["completed-older", "completed-unknown", "announced-unknown"],
+    )
+    def test_deferred_refetch_issued_unless_proven_satisfied(
+        self, completed_last_modified: str | None, announced: int | None
+    ) -> None:
+        completed = FetchResult(200, '{"flags":{}}', None, completed_last_modified)
+        fetch = _GatedFetch([completed, _304])
+        pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
+        pm.start()
+        try:
+            pm.trigger_immediate_fetch(None)
+            assert fetch.first_started.wait(1.0)
+            pm.trigger_immediate_fetch(announced)
+            fetch.release.set()
+            assert _wait_until(lambda: fetch.calls == 2)
+        finally:
+            pm.stop()
+
+    def test_deferred_refetch_issued_after_a_failed_fetch(self) -> None:
+        started = threading.Event()
+        gate = threading.Event()
+        count = [0]
+
+        def fetch(cancel=None) -> FetchResult:
+            count[0] += 1
+            if count[0] == 1:
+                started.set()
+                gate.wait(2.0)
+                raise OSError("network")
+            return _304
+
+        pm, calls = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
+        pm.start()
+        try:
+            pm.trigger_immediate_fetch(None)
+            assert started.wait(1.0)
+            pm.trigger_immediate_fetch(_LM_EPOCH)
+            gate.set()
+            assert _wait_until(lambda: calls["success"] == [True])
+            assert calls["failure"] == ["OSError"]
+        finally:
+            pm.stop()
+
+    def test_skipped_refetch_stays_pending_until_a_fetch_reaches_the_cdn(
+        self,
+    ) -> None:
+        results = iter([_SKIPPED, _304, _304])
+        seen: list[FetchResult] = []
+
+        def fetch(cancel=None) -> FetchResult:
+            r = next(results)
+            seen.append(r)
+            return r
+
+        pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
+        pm.start()
+        try:
+            pm.trigger_immediate_fetch(_LM_EPOCH)
+            assert _wait_until(lambda: len(seen) == 1)
+            time.sleep(0.1)
+            # re-issuing a skipped re-fetch at once would only be skipped again and spin
+            assert len(seen) == 1
+            assert pm._pending_sse_refetch_at == _LM_EPOCH
+            # the next fetch that makes a request issues the kept one after it
+            pm.trigger_immediate_fetch(None)
+            assert _wait_until(lambda: len(seen) == 3)
+        finally:
+            pm.stop()
+
+    def test_contended_tick_neither_fetches_nor_emits(self) -> None:
+        fetch = _GatedFetch([_304])
+        pm, calls = _make_pm(fetch_fn=fetch, interval_s=_FAST_INTERVAL)
+        pm.start()
+        try:
+            assert fetch.first_started.wait(1.0)
+            pm.trigger_immediate_fetch(_LM_EPOCH)
+            # ticks keep firing while the first fetch is blocked
+            time.sleep(_FAST_INTERVAL * 4)
+            assert fetch.calls == 1
+            assert calls["success"] == []
+        finally:
+            fetch.release.set()
+            pm.stop()
+
+    def test_trigger_after_stop_is_ignored(self) -> None:
+        fetch = _GatedFetch([_304])
+        fetch.release.set()
+        pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
+        pm.start()
+        pm.stop()
+        pm.trigger_immediate_fetch(_LM_EPOCH)
+        time.sleep(0.1)
+        assert fetch.calls == 0
