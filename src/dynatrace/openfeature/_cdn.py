@@ -51,6 +51,12 @@ class FetchResult:
     def is_success(self) -> bool:
         return 200 <= self.status < 300
 
+    @property
+    def last_modified_epoch_s(self) -> float | None:
+        """``last_modified`` as Unix epoch seconds, or None when absent or unparseable."""
+        parsed = _parse_http_date(self.last_modified)
+        return parsed.timestamp() if parsed is not None else None
+
 
 @dataclass
 class _CacheState:
