@@ -22,6 +22,8 @@ dependencies = [
     "requests>=2.27.0",
     # 2.3 added HTTPResponse.shutdown, which _cdn uses to enforce the fetch deadline
     "urllib3>=2.3.0",
+    # SSE client (ld_eventsource); the floor is the release _sse was built and verified against
+    "launchdarkly-eventsource>=1.7.3,<2.0.0",
 ]
 requires-python = ">=3.10"
 
@@ -62,6 +64,11 @@ fixed_format_cache = true
 pretty = true
 strict = true
 disallow_any_generics = false
+
+[[tool.mypy.overrides]]
+# ld_eventsource ships no type stubs or py.typed marker
+module = ["ld_eventsource", "ld_eventsource.*"]
+ignore_missing_imports = true
 
 [tool.ruff]
 target-version = "py310"
