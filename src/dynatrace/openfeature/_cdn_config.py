@@ -12,7 +12,7 @@ def _non_blank(value: typing.Any) -> str | None:
 
 
 def extract_sse_url(config_json: str | None, fallback_origin: str | None) -> str | None:
-    """Return the SSE URL of the first ``sse`` entry in ``eventStreams``, or None (ADR-0008).
+    """Return the SSE URL of the first ``sse`` entry in ``eventStreams``.
     A non-blank ``url`` wins; else ``endpoint.requestUri`` on ``endpoint.origin`` or ``fallback_origin``."""
     if not config_json or not config_json.strip():
         return None

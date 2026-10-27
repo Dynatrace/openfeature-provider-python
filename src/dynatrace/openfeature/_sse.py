@@ -18,7 +18,7 @@ from ._sse_message import SseMessage
 log = logging.getLogger(__name__)
 
 # the stream is long-lived and idle between notifications, so only a dead connection should trip this
-SSE_READ_TIMEOUT_S: float = 100 * 60.0
+SSE_READ_TIMEOUT_S: float = 150 * 60.0
 # reconnect backoff: doubles from the initial delay up to the max, with jitter
 SSE_INITIAL_RETRY_DELAY_S: float = 1.0
 SSE_MAX_RETRY_DELAY_S: float = 30.0
@@ -47,7 +47,10 @@ class _StreamPool(urllib3.PoolManager):
 
     def shutdown_stream(self) -> None:
         """Shut the stream's socket down so the server sees it close, even on Windows.
-        There a blocked recv() is not woken, but the stop flag keeps the reader inert."""
+        ld_eventsource's own close() only releases the connection the   re, because shutdown() does not
+        wake the reader thread blocked in recv(), and closing under it would deadlock on its buffer lock.
+        So the socket stays open until GC and the server keeps a stale subscriber; shutting it down here
+        sends the FIN. The reader may stay blocked, but the stop flag keeps it inert: it makes no callbacks."""
         sock = _socket_of(self.response)
         if sock is None:
             return
@@ -94,8 +97,6 @@ class SseManager:
         """Open the stream on a daemon thread; returns without waiting for it to connect."""
         if self._thread is not None:
             return
-        # TODO
-        # no logger is handed to the client: it logs the full URL, credentials included
         self._client = SSEClient(
             connect=ConnectStrategy.http(
                 self._sse_url,

@@ -190,10 +190,18 @@ def _the_cdn_serves_the_flag_configuration_advertising_an_sse_stream_at_url(
     )
 
 
+# a header value is double-quoted, or single-quoted when it holds double quotes itself (an ETag: '"v1"')
+_HEADER_VALUE = r"(?P<value>\"[^\"]*\"|'[^']*')"
+
+
+def _unquote(value: str) -> str:
+    return value[1:-1]
+
+
 @step(
     parsers.re(
         r'an initialized, READY provider serving the "(?P<name>[^"]+)" flag configuration'
-        r'(?: with "(?P<header>[^"]+)" header "(?P<value>[^"]*)")?'
+        r'(?: with "(?P<header>[^"]+)" header ' + _HEADER_VALUE + r")?"
     )
 )
 def _an_initialized_ready_provider_serving_the_flag_configuration(
@@ -201,7 +209,7 @@ def _an_initialized_ready_provider_serving_the_flag_configuration(
 ) -> None:
     response = build_cdn_response(HTTPStatus.OK, _load_flag_config(name))
     if header:
-        response.with_header(header, value or "")
+        response.with_header(header, _unquote(value) if value else "")
     scenario.sdk_key = BASE_KEY
     _set_cdn_responses(scenario, response)
     _register_provider_with_sdk(scenario)
@@ -264,7 +272,7 @@ def _the_cdn_responds_with_status_and_body(
 @step(
     parsers.re(
         r'the CDN responds with status (?P<status>\d+) and the "(?P<name>[^"]+)" flag configuration'
-        r' with "(?P<header>[^"]+)" header "(?P<value>[^"]*)"'
+        r' with "(?P<header>[^"]+)" header ' + _HEADER_VALUE
     ),
     converters={"status": int},
 )
@@ -273,7 +281,9 @@ def _the_cdn_responds_with_status_and_the_flag_configuration_with_header(
 ) -> None:
     _set_cdn_responses(
         scenario,
-        build_cdn_response(status, _load_flag_config(name)).with_header(header, value),
+        build_cdn_response(status, _load_flag_config(name)).with_header(
+            header, _unquote(value)
+        ),
     )
 
 
@@ -370,7 +380,7 @@ def _the_server_emits_an_sse_message(scenario: Scenario, payload: str) -> None:
     _poll_until(SETTLE, lambda: scenario.mock.count_cdn_requests() > baseline)
 
 
-@step("the grace period expires")
+@step("the GRACE_PERIOD expires")
 def _the_grace_period_expires(scenario: Scenario) -> None:
     _poll_until(
         GRACE_PERIOD + SETTLE,
@@ -575,7 +585,8 @@ def _the_initial_cdn_request_has_no_header(scenario: Scenario, header: str) -> N
 
 @step(
     parsers.re(
-        r'the (?P<index>\d+)\. CDN request has the "(?P<header>[^"]+)" header "(?P<value>[^"]*)"'
+        r'the (?P<index>\d+)\. CDN request has the "(?P<header>[^"]+)" header '
+        + _HEADER_VALUE
     ),
     converters={"index": int},
 )
@@ -586,7 +597,7 @@ def _the_cdn_request_has_the_header(
     assert request.has_header(header), (
         f"{index}. CDN request missing expected header: {header}"
     )
-    assert request.get_header(header) == value, (
+    assert request.get_header(header) == _unquote(value), (
         f"{index}. CDN request {header} header mismatch"
     )
 
