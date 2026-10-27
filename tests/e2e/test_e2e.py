@@ -194,10 +194,6 @@ def _the_cdn_serves_the_flag_configuration_advertising_an_sse_stream_at_url(
 _HEADER_VALUE = r"(?P<value>\"[^\"]*\"|'[^']*')"
 
 
-def _unquote(value: str) -> str:
-    return value[1:-1]
-
-
 @step(
     parsers.re(
         r'an initialized, READY provider serving the "(?P<name>[^"]+)" flag configuration'
