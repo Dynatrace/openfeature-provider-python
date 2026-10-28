@@ -18,7 +18,7 @@ classifiers = [
 keywords = ["openfeature", "dynatrace", "feature-flags", "feature-management"]
 dependencies = [
     "openfeature-sdk>=0.8.2",
-    "openfeature-flagd-core>=1.0.0,<2.0.0",
+    "openfeature-flagd-core>=2.0.0,<3.0.0",
     "requests>=2.27.0",
     # 2.3 added HTTPResponse.shutdown, which _cdn uses to enforce the fetch deadline
     "urllib3>=2.3.0",
