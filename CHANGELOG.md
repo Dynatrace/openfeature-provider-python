@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.0](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.2.0...v0.3.0) (2026-10-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* update flagd-core to the latest major ([#31](https://github.com/Dynatrace/openfeature-provider-python/issues/31))
+
+### ✨ New Features
+
+* update flagd-core to the latest major ([#31](https://github.com/Dynatrace/openfeature-provider-python/issues/31)) ([a2b6d55](https://github.com/Dynatrace/openfeature-provider-python/commit/a2b6d55793508d2e9a64ee5d52d29e9b46eaf64b))
+
+
+### 🐛 Bug Fixes
+
+* bound CDN fetch duration and skip contended poll ticks ([#24](https://github.com/Dynatrace/openfeature-provider-python/issues/24)) ([ccc4e80](https://github.com/Dynatrace/openfeature-provider-python/commit/ccc4e8052f704e3620db036eb34b917d3e6d5807))
+
+
+### 📚 Documentation
+
+* align README with the standard provider format ([#22](https://github.com/Dynatrace/openfeature-provider-python/issues/22)) ([8ec3621](https://github.com/Dynatrace/openfeature-provider-python/commit/8ec36219b04e019c041ae35b49c3327538180619))
+
 ## [0.2.0](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.1.1...v0.2.0) (2026-08-27)
 
 
