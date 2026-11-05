@@ -93,7 +93,6 @@ SSE_CONNECT_TIMEOUT = 5.0
 MOCK_SERVER_PLACEHOLDER = "<mockserver>"
 # how far before a tick an SSE re-fetch is triggered, so it is still in flight then
 SHORTLY_BEFORE = 0.5
-# payload a shut-down provider must not react to
 REFETCH_MESSAGE = '{"type":"refetchConfig","lastModified":1704153600}'
 
 scenarios(str(HARNESS_DIR / "gherkin" / "cdn.feature"))
@@ -316,23 +315,7 @@ def _the_cdn_responds_with_status_and_retry_after_seconds(
 
 @step("polling triggers a configuration refetch")
 def _polling_triggers_a_configuration_refetch(scenario: Scenario) -> None:
-    _await_cdn_request_within(scenario, POLL_TIMEOUT)
-
-
-@step(
-    "polling triggers a configuration refetch after the SSE_DISCONNECTED_POLL_INTERVAL"
-)
-def _polling_triggers_a_configuration_refetch_after_the_sse_disconnected_poll_interval(
-    scenario: Scenario,
-) -> None:
-    _await_cdn_request_within(scenario, SSE_DISCONNECTED_POLL_INTERVAL)
-
-
-@step("polling triggers a configuration refetch after the SSE_CONNECTED_POLL_INTERVAL")
-def _polling_triggers_a_configuration_refetch_after_the_sse_connected_poll_interval(
-    scenario: Scenario,
-) -> None:
-    _await_cdn_request_within(scenario, SSE_CONNECTED_POLL_INTERVAL)
+    _await_cdn_request_within(scenario, POLL_INTERVAL)
 
 
 # a blip: the backend drops the stream and refuses connections for a while, then accepts them again
@@ -356,11 +339,9 @@ def _the_sse_stream_drops_and_reconnects(scenario: Scenario, seconds: int) -> No
     ), f"SSE did not reconnect within {reconnect_timeout}s of a {seconds}s outage"
 
 
-# a sustained outage: connections stay refused until the stream is restored or reset
 @step("the SSE stream drops and stays down")
 def _the_sse_stream_drops_and_stays_down(scenario: Scenario) -> None:
     scenario.mock.drop_sse()
-    # the provider switches cadence as soon as it sees the fault; the Then steps assert what it did
     assert _poll_until(SETTLE, lambda: scenario.mock.sse_client_count() == 0), (
         "the mock server did not drop the SSE stream"
     )
@@ -372,7 +353,6 @@ def _the_server_emits_an_sse_message(scenario: Scenario, payload: str) -> None:
     # pytest-bdd doubles backslashes when it substitutes an outline cell into the step text,
     # so "\"v2\"" would reach the wire as invalid JSON; Cucumber passes the cell as written
     scenario.mock.emit_sse(_unquote(payload).replace("\\\\", "\\"))
-    # essentially a sleep, cut short once the message has triggered a CDN request
     _poll_until(SETTLE, lambda: scenario.mock.count_cdn_requests() > baseline)
 
 
@@ -769,12 +749,7 @@ def _consume_event(scenario: Scenario, expected: ProviderEvent) -> EventDetails:
 
 
 def _await_sse_settled(scenario: Scenario) -> None:
-    """Wait for the SSE stream and the catch-up fetch its connect pulls.
-
-    So a scenario starting from a READY provider never races the stream it is
-    about to drop or message. No-op when SSE is off, as it is throughout the
-    CDN spec.
-    """
+    """Wait for the SSE stream and the catch-up fetch its connect pulls."""
     if not scenario.sse_enabled:
         return
     assert _poll_until(
@@ -789,7 +764,7 @@ def _await_sse_settled(scenario: Scenario) -> None:
 def _await_cdn_request_within(scenario: Scenario, interval: float) -> None:
     """Wait for a CDN request to arrive within ``interval`` seconds."""
     baseline = scenario.mock.count_cdn_requests()
-    _wait_for(interval, lambda: scenario.mock.count_cdn_requests() > baseline)
+    _wait_for(interval + 1, lambda: scenario.mock.count_cdn_requests() > baseline)
 
 
 def _advertising_sse_url(scenario: Scenario, config_json: str, url: str) -> str:

@@ -10,3 +10,6 @@ coverage.xml
 .ruff_cache/
 .pytest_cache/
 .idea/
+
+# macOS
+.DS_Store

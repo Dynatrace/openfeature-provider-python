@@ -343,6 +343,7 @@ class TestPollingManagerSseRefetch:
             assert fetch.calls == 1, "a contended re-fetch must not overlap"
             fetch.release.set()
             assert _wait_until(lambda: fetch.calls == 2)
+            # ensure the fetches were coalesced and not both are executed
             time.sleep(0.1)
             assert fetch.calls == 2, "deferred re-fetches must coalesce into one"
         finally:
@@ -373,7 +374,7 @@ class TestPollingManagerSseRefetch:
         ],
         ids=["completed-older", "completed-unknown", "announced-unknown"],
     )
-    def test_deferred_refetch_issued_unless_proven_satisfied(
+    def test_deferred_refetch_issued_(
         self, completed_last_modified: str | None, announced: int | None
     ) -> None:
         completed = FetchResult(200, '{"flags":{}}', None, completed_last_modified)
@@ -405,7 +406,7 @@ class TestPollingManagerSseRefetch:
         pm, calls = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
         pm.start()
         try:
-            pm.trigger_immediate_fetch(None)
+            pm.trigger_immediate_fetch(_LM_EPOCH)
             assert started.wait(1.0)
             pm.trigger_immediate_fetch(_LM_EPOCH)
             gate.set()

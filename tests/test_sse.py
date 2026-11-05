@@ -133,10 +133,9 @@ class TestSseManager:
         manager = _start(sse_server.url, rec)
         assert wait_until(lambda: sse_server.client_count == 1)
         manager.stop()
-        # no event to wake the reader first: the socket itself must close, on Windows too
         assert wait_until(lambda: sse_server.client_count == 0)
         sse_server.emit('{"type":"refetchConfig"}')
-        assert not wait_until(lambda: rec.messages != [], timeout=0.3)
+        assert not wait_until(lambda: rec.messages != [], timeout=0.5)
 
     def test_a_reconnect_racing_stop_is_closed(self, sse_server: SseServer) -> None:
         rec = _Recorder()
@@ -163,7 +162,7 @@ class TestSseManager:
         manager.stop()
         assert time.monotonic() - t0 < 0.5, "stop() blocked on the SSE close"
         sse_server.emit('{"type":"refetchConfig"}')
-        assert not wait_until(lambda: rec.messages != [], timeout=0.3)
+        assert not wait_until(lambda: rec.messages != [], timeout=0.5)
 
     def test_a_failing_callback_does_not_kill_the_stream(
         self, sse_server: SseServer
@@ -173,7 +172,7 @@ class TestSseManager:
         def on_message(msg: SseMessage) -> None:
             received.append(msg)
             if len(received) == 1:
-                raise RuntimeError("boom")
+                raise RuntimeError("on_message failed")
 
         manager = SseManager(sse_server.url, lambda: None, lambda: None, on_message)
         manager.start()
@@ -199,6 +198,6 @@ class TestSseManager:
             manager.stop()
         assert sse_server.paths[0] == "/sse?key=secret"
         # urllib3's own DEBUG request log is out of our hands, as it is for CDN fetches
-        ours = [r for r in caplog.records if r.name.startswith("dynatrace.")]
-        assert ours
-        assert not any("secret" in r.getMessage() for r in ours)
+        dt_logs = [r for r in caplog.records if r.name.startswith("dynatrace.")]
+        assert dt_logs
+        assert not any("secret" in r.getMessage() for r in dt_logs)

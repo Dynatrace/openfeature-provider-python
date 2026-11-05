@@ -57,7 +57,7 @@ class _SseHandler(BaseHTTPRequestHandler):
             try:
                 item = events.get(timeout=_IDLE_CHECK_S)
             except queue.Empty:
-                if self._client_closed():
+                if self._check_client_closed():
                     return
                 continue
             if item is None:
@@ -69,7 +69,7 @@ class _SseHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"%x\r\n%s\r\n" % (len(item), item))
             self.wfile.flush()
 
-    def _client_closed(self) -> bool:
+    def _check_client_closed(self) -> bool:
         readable, _, _ = select.select([self.connection], [], [], 0)
         if not readable:
             return False

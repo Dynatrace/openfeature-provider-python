@@ -189,7 +189,7 @@ class PollingManager:
         ):
             log.debug(
                 "dropping deferred SSE re-fetch: completed fetch already returned "
-                "Last-Modified %s >= announced %s",
+                "Last-Modified %s >= pending %s",
                 observed,
                 pending,
             )

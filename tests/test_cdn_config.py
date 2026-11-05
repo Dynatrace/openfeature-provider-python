@@ -113,6 +113,6 @@ class TestExtractSseUrl:
     def test_no_usable_entry(self, config: str | None) -> None:
         assert extract_sse_url(config, _ORIGIN) is None
 
-    def test_endpoint_without_any_origin(self) -> None:
+    def test_endpoint_without_any_fallback_sorigin(self) -> None:
         config = _config({"type": "sse", "endpoint": {"requestUri": "/sse"}})
         assert extract_sse_url(config, None) is None
