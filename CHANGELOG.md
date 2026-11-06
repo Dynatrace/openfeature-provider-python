@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.3.0...v0.3.1) (2026-11-06)
+
+
+### 🧹 Chore
+
+* **deps:** bump virtualenv from 21.3.3 to 21.14.13 ([#29](https://github.com/Dynatrace/openfeature-provider-python/issues/29)) ([fd844e2](https://github.com/Dynatrace/openfeature-provider-python/commit/fd844e242018dee12993a60b8b2abd16eb2e428a))
+
 ## [0.3.0](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.2.0...v0.3.0) (2026-11-06)
 
 
