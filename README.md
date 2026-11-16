@@ -4,6 +4,8 @@ The official [Dynatrace](https://dynatrace.com) [OpenFeature](https://openfeatur
 
 The provider evaluates flags in-process: on initialization it fetches your flag configuration from the Dynatrace CDN and refreshes it in the background, so evaluations are local and do not make a network call.
 
+Changes are picked up through a server-sent events (SSE) stream advertised in the flag configuration: a change notification triggers an immediate re-fetch, and polling every 10 minutes acts as a safety net. While the stream is unavailable or disabled, the provider polls every 10 seconds instead.
+
 > **Status:** Early alpha — not yet ready for production use.
 
 ## Installation
@@ -52,6 +54,7 @@ api.set_provider(
 | --- | --- | --- | --- |
 | `config_origin` | `str` | derived from SDK key | Override the flag configuration origin. |
 | `metrics_origin` | `str` | derived from SDK key | Override the evaluation metrics ingest origin. |
+| `disable_sse` | `bool` | `False` | Don't attempt an SSE connection and poll only, every 10 seconds. |
 
 ## Running the e2e tests
 

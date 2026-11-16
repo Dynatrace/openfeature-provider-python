@@ -15,6 +15,10 @@ from dynatrace.openfeature._cdn import (
     FetchResult,
 )
 from dynatrace.openfeature.options import DynatraceProviderOptions
+from dynatrace.openfeature.provider import (
+    _POLL_INTERVAL_S,
+    _SSE_CONNECTED_POLL_INTERVAL_S,
+)
 
 _KEY = "dt01.server_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5"
 _CDN_URL = "https://cdn.us.fm.dynatrace.com/server/" + _KEY + ".json"
@@ -139,8 +143,9 @@ class TestInitialize:
         assert rsps_lib.calls[1].request.headers.get("If-None-Match") is None
         p.shutdown()
 
+    @pytest.mark.parametrize("body", ['{"flags": 5}', ""], ids=["invalid", "empty"])
     @rsps_lib.activate
-    def test_rejected_poll_config_does_not_leave_validators_behind(self) -> None:
+    def test_rejected_poll_config_keeps_the_applied_validators(self, body: str) -> None:
         rsps_lib.add(
             rsps_lib.GET,
             _CDN_URL,
@@ -151,7 +156,7 @@ class TestInitialize:
         rsps_lib.add(
             rsps_lib.GET,
             _CDN_URL,
-            body='{"flags": 5}',
+            body=body,
             status=200,
             headers={"ETag": '"v2"'},
         )
@@ -162,12 +167,12 @@ class TestInitialize:
         while time.monotonic() < deadline and len(rsps_lib.calls) < 3:
             time.sleep(0.02)
         assert len(rsps_lib.calls) >= 3
-        # second poll re-requests the body instead of revalidating the rejected config
-        assert rsps_lib.calls[2].request.headers.get("If-None-Match") is None
+        # the next poll revalidates the applied config, not the rejected one
+        assert rsps_lib.calls[2].request.headers.get("If-None-Match") == '"v1"'
         p.shutdown()
 
 
-class TestFetchDurationInvariant:
+class TestPollIntervals:
     def test_rejects_poll_interval_below_max_fetch_duration(self) -> None:
         # The default 10s interval must stay above the 8.12s worst-case fetch.
         with pytest.raises(ValueError, match="maximum fetch duration"):
@@ -177,9 +182,15 @@ class TestFetchDurationInvariant:
         p = DynatraceProvider(_KEY, poll_interval_s=MAX_FETCH_DURATION_S + 0.01)
         p.shutdown()
 
-    def test_default_interval_satisfies_the_invariant(self) -> None:
+    def test_both_default_cadences_exceed_the_max_fetch_duration(self) -> None:
+        # providers.md 2.1: a poll must not outlive its interval
+        assert _POLL_INTERVAL_S > MAX_FETCH_DURATION_S
+        assert _SSE_CONNECTED_POLL_INTERVAL_S > MAX_FETCH_DURATION_S
+
+    def test_the_provider_uses_the_default_cadences(self) -> None:
         p = DynatraceProvider(_KEY)
-        assert p._poll_interval_s > MAX_FETCH_DURATION_S
+        assert p._poll_interval_s == _POLL_INTERVAL_S
+        assert p._sse_connected_poll_interval_s == _SSE_CONNECTED_POLL_INTERVAL_S
         p.shutdown()
 
 
@@ -343,8 +354,50 @@ class _BlockingFetcher:
         self.release.wait(timeout=5.0)
         return FetchResult(200, self._body, None, None)
 
+    def commit(self) -> None:
+        pass
+
 
 class TestInitShutdownRace:
+    @rsps_lib.activate
+    def test_repeated_initialize_is_a_no_op(self) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
+        p = _make_provider()
+        p.initialize()
+        poller = p._poller
+        p.initialize()
+        # no second fetch, and the running poller is kept
+        assert len(rsps_lib.calls) == 1
+        assert p._poller is poller
+        assert p._state == ProviderStatus.READY
+        p.shutdown()
+
+    @rsps_lib.activate
+    def test_repeated_initialize_while_recovering_is_a_no_op(self) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        p = _make_provider()
+        with pytest.raises(GeneralError, match="HTTP 500"):
+            p.initialize()
+        poller = p._poller
+        requests_before = len(rsps_lib.calls)
+        p.initialize()
+        # the recovery poller keeps running; no second initial fetch
+        assert len(rsps_lib.calls) == requests_before
+        assert p._poller is poller
+        assert p._state == ProviderStatus.ERROR
+        p.shutdown()
+
+    @rsps_lib.activate
+    def test_initialize_after_shutdown_runs_again(self) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
+        p = _make_provider()
+        p.initialize()
+        p.shutdown()
+        p.initialize()
+        assert len(rsps_lib.calls) == 2
+        assert p._state == ProviderStatus.READY
+        p.shutdown()
+
     def test_shutdown_during_initialize_is_not_overwritten(self) -> None:
         fetcher = _BlockingFetcher(_FIXTURE.read_text())
         p = DynatraceProvider(_KEY, fetcher=fetcher, poll_interval_s=600.0)

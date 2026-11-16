@@ -5,6 +5,7 @@ import threading
 from collections.abc import Mapping, Sequence
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
+from urllib.parse import urlsplit
 
 import requests
 
@@ -18,6 +19,7 @@ from openfeature.provider import AbstractProvider, Metadata, ProviderStatus
 
 from ._cdn import MAX_FETCH_DURATION_S as _MAX_FETCH_DURATION_S
 from ._cdn import CdnFetcher
+from ._cdn_config import extract_sse_url
 from ._metrics_aggregator import (
     HARD_CAP_DISTINCT_FLAGS,
     SOFT_CAP_DISTINCT_FLAGS,
@@ -26,12 +28,15 @@ from ._metrics_aggregator import (
 from ._metrics_flusher import EvaluationMetricsFlusher
 from ._metrics_hook import DynatraceMetricsHook
 from ._polling import PollingManager
+from ._sse import SseManager
+from ._sse_message import TYPE_REFETCH_CONFIG, SseMessage
 from .options import DynatraceProviderOptions
 
 log = logging.getLogger(__name__)
 
 _PROVIDER_NAME = "dynatrace"
 _POLL_INTERVAL_S: float = 10.0
+_SSE_CONNECTED_POLL_INTERVAL_S: float = 600.0
 _GRACE_PERIOD_S: float = 60.0
 _METRICS_FLUSH_INTERVAL_S: float = 30.0
 _VERSION_METADATA_KEY = "version"
@@ -55,6 +60,7 @@ class DynatraceProvider(AbstractProvider):
         fetcher: CdnFetcher | None = None,
         metrics_flusher: EvaluationMetricsFlusher | None = None,
         poll_interval_s: float = _POLL_INTERVAL_S,
+        disable_sse: bool = False,
         grace_period_s: float = _GRACE_PERIOD_S,
         metrics_flush_interval_s: float = _METRICS_FLUSH_INTERVAL_S,
     ) -> None:
@@ -75,8 +81,13 @@ class DynatraceProvider(AbstractProvider):
         self._flagd_core = flagd_core or FlagdCore()
         self._fetcher = fetcher or CdnFetcher(options)
         self._poll_interval_s = poll_interval_s
+        self._sse_connected_poll_interval_s = _SSE_CONNECTED_POLL_INTERVAL_S
+        self._sse_enabled = not disable_sse
         self._grace_period_s = grace_period_s
         self._poller: PollingManager | None = None
+        self._sse_manager: SseManager | None = None
+        # true while the SSE stream is open; only selects the poll cadence
+        self._sse_connected = False
         self._grace_timer: threading.Timer | None = None
         self._state = ProviderStatus.NOT_READY
         self._lock = threading.RLock()
@@ -97,6 +108,11 @@ class DynatraceProvider(AbstractProvider):
             self._metrics_aggregator, on_record=self._metrics_flusher.on_record
         )
 
+    @property
+    def _init_started(self) -> bool:
+        """Whether initialize() has run since the last shutdown(); its poller runs on both outcomes. Caller holds ``_lock``."""
+        return self._poller is not None
+
     def get_metadata(self) -> Metadata:
         return Metadata(name=_PROVIDER_NAME)
 
@@ -104,10 +120,15 @@ class DynatraceProvider(AbstractProvider):
         return [self._metrics_hook]
 
     def initialize(self, evaluation_context: EvaluationContext | None = None) -> None:
-        log.info("initializing Dynatrace provider (key=%s)", self._options.public_key)
         with self._lock:
+            if self._init_started:
+                log.debug("provider already initialized; ignoring initialize()")
+                return
             self._generation += 1
             generation = self._generation
+        log.info("initializing Dynatrace provider (key=%s)", self._options.public_key)
+        if not self._sse_enabled:
+            log.debug("SSE disabled by configuration; running in polling-only mode")
 
         body = self._fetch_initial_body(generation)
 
@@ -117,6 +138,7 @@ class DynatraceProvider(AbstractProvider):
             # not just ParseError: a non-JSON body raises JSONDecodeError, which must still leave a recoverable provider
             self._fail_initialization(generation, f"invalid config: {exc}")
             raise GeneralError(f"initial CDN config is invalid: {exc}") from exc
+        self._fetcher.commit()
 
         # set the aggregator version eagerly so it is authoritative before any evaluation is recorded
         self._update_metrics_version_from_flag_set()
@@ -132,6 +154,7 @@ class DynatraceProvider(AbstractProvider):
             self._cancel_grace_timer()
             self._state = ProviderStatus.READY
             self._start_poller_locked()
+            self._sync_sse_locked(body)
         self._metrics_flusher.start()
         log.info("Dynatrace provider initialized successfully")
 
@@ -173,12 +196,71 @@ class DynatraceProvider(AbstractProvider):
         self._poller = PollingManager(
             fetch_flags=self._fetcher.fetch,
             store_flags=self._store_flags,
+            commit_fetch=self._fetcher.commit,
+            is_newer_than_applied=self._fetcher.is_newer_than_committed,
             emit_change=self._on_configuration_changed,
             emit_success=self._on_fetch_success,
             emit_failure=self._on_fetch_failure,
             interval_s=self._poll_interval_s,
         )
         self._poller.start()
+
+    def _sync_sse_locked(self, body: str) -> None:
+        """Follow the SSE stream advertised in ``body``: open it, reconnect when its URL rotates,
+        close it when it is withdrawn. Caller holds ``_lock``."""
+        if not self._sse_enabled:
+            return
+        cdn = urlsplit(self._options.cdn_url)
+        sse_url = extract_sse_url(body, f"{cdn.scheme}://{cdn.netloc}")
+        current = self._sse_manager
+        if sse_url is None:
+            # the server always sends eventStreams, so only a withdrawn stream is worth logging
+            if current is not None:
+                log.info(
+                    "config no longer advertises an SSE stream; falling back to polling only"
+                )
+                self._stop_sse_locked()
+            return
+        if current is not None:
+            if current.url == sse_url:
+                return
+            log.info("SSE stream URL rotated; reconnecting")
+            self._stop_sse_locked()
+
+        manager: SseManager | None = None
+
+        def on_connected() -> None:
+            self._on_sse_connected(manager)
+
+        def on_disconnected() -> None:
+            self._on_sse_disconnected(manager)
+
+        def on_message(msg: SseMessage) -> None:
+            self._on_sse_message(manager, msg)
+
+        manager = SseManager(sse_url, on_connected, on_disconnected, on_message)
+        try:
+            manager.start()
+        except Exception as exc:
+            # not fatal; polling still carries changes.
+            manager.stop()
+            log.warning(
+                "failed to start SSE connection; falling back to polling-only mode: %s",
+                type(exc).__name__,
+            )
+            return
+        self._sse_manager = manager
+
+    def _stop_sse_locked(self) -> None:
+        """Close the SSE stream and forget its state; polling returns to its normal cadence.
+        Caller holds ``_lock``."""
+        was_connected = self._sse_connected
+        self._sse_connected = False
+        if self._sse_manager is not None:
+            self._sse_manager.stop()
+            self._sse_manager = None
+        if was_connected and self._poller is not None:
+            self._poller.set_interval(self._poll_interval_s)
 
     def _fail_initialization(self, generation: int, reason: str) -> None:
         """Enter ERROR and start polling so the provider can still recover.
@@ -195,7 +277,7 @@ class DynatraceProvider(AbstractProvider):
                     "not starting recovery poller"
                 )
                 return
-            # nothing was applied, so cached validators would let the recovery poll 304 its way to READY over an empty store
+            # a previous lifecycle's validators would let the recovery poll 304 its way to READY over an empty store
             self._fetcher.invalidate_cache()
             log.warning("initialization failed (%s); polling for recovery", reason)
             self._state = ProviderStatus.ERROR
@@ -212,6 +294,8 @@ class DynatraceProvider(AbstractProvider):
             )
             if not already_idle:
                 log.info("shutting down Dynatrace provider")
+                # providers.md 6.1: close SSE first, so no notification triggers a fetch mid-shutdown
+                self._stop_sse_locked()
                 self._state = ProviderStatus.NOT_READY
                 self._cancel_grace_timer()
                 if self._poller is not None:
@@ -282,13 +366,13 @@ class DynatraceProvider(AbstractProvider):
         sealed = self._metrics_aggregator.drain()
         self._metrics_flusher.enqueue_sealed_batch(sealed)
         self._metrics_flusher.trigger_flush()
-        try:
-            changed = self._flagd_core.set_flags_and_get_changed_keys(body)
-        except Exception:
-            # fetched but not applied, so its validators would make the next poll a 304 over the previous config
-            self._fetcher.invalidate_cache()
-            raise
+        changed = self._flagd_core.set_flags_and_get_changed_keys(body)
         self._update_metrics_version_from_flag_set()
+        with self._lock:
+            # every stored config may open, rotate or withdraw the stream, including the first one after a failed init;
+            # a shut-down provider has no poller
+            if self._poller is not None:
+                self._sync_sse_locked(body)
         return changed
 
     def _update_metrics_version_from_flag_set(self) -> None:
@@ -300,6 +384,11 @@ class DynatraceProvider(AbstractProvider):
         with self._lock:
             if self._state == ProviderStatus.NOT_READY:
                 return
+            if self._sse_connected:
+                self._set_poll_interval_locked(
+                    self._sse_connected_poll_interval_s,
+                    "fetch succeeded with SSE connected",
+                )
             self._cancel_grace_timer()
             if self._state in (ProviderStatus.STALE, ProviderStatus.ERROR):
                 prev_state = self._state
@@ -311,6 +400,7 @@ class DynatraceProvider(AbstractProvider):
         with self._lock:
             if self._state == ProviderStatus.NOT_READY:
                 return
+            self._set_poll_interval_locked(self._poll_interval_s, "fetch failed")
             if self._state == ProviderStatus.READY:
                 self._state = ProviderStatus.STALE
                 log.warning("poll failed, transitioning to STALE: %s", reason)
@@ -319,6 +409,14 @@ class DynatraceProvider(AbstractProvider):
             else:
                 log.warning("poll failed (state=%s): %s", self._state, reason)
 
+    def _set_poll_interval_locked(self, interval_s: float, reason: str) -> None:
+        """Switch the poll cadence, logging only an actual change. Caller holds ``_lock``."""
+        poller = self._poller
+        if poller is None or poller.interval_s == interval_s:
+            return
+        poller.set_interval(interval_s)
+        log.info("poll interval switched to %ss (%s)", interval_s, reason)
+
     def _on_configuration_changed(self, changed_keys: list[str]) -> None:
         with self._lock:
             if self._state == ProviderStatus.NOT_READY:
@@ -326,6 +424,59 @@ class DynatraceProvider(AbstractProvider):
             self.emit_provider_configuration_changed(
                 ProviderEventDetails(flags_changed=changed_keys)
             )
+
+    # SSE callbacks: each names the manager it came from, so a stream already closed by shutdown cannot act.
+    # SSE only prompts fetches and never touches READY/STALE/ERROR; the cadence follows fetch outcomes (see above).
+
+    def _on_sse_connected(self, source: SseManager | None) -> None:
+        """Issue a catch-up fetch for anything missed while disconnected; its success relaxes the cadence."""
+        with self._lock:
+            if source is None or source is not self._sse_manager:
+                return
+            self._sse_connected = True
+            poller = self._poller
+            if poller is None:
+                return
+            log.info("SSE connected; requesting a catch-up fetch")
+            # no announced lastModified, so a deferred catch-up is never dropped
+            poller.request_out_of_band_fetch(None)
+
+    def _on_sse_disconnected(self, source: SseManager | None) -> None:
+        """Switch to the 10s cadence; fetch failures from here on are handled like any poll failure."""
+        with self._lock:
+            if source is None or source is not self._sse_manager:
+                return
+            if not self._sse_connected:
+                # never connected, or a repeat fault while the library retries
+                return
+            self._sse_connected = False
+            log.warning(
+                "SSE disconnected; falling back to polling every %ss",
+                self._poll_interval_s,
+            )
+            if self._poller is not None:
+                self._poller.set_interval(self._poll_interval_s)
+
+    def _on_sse_message(self, source: SseManager | None, msg: SseMessage) -> None:
+        """Trigger a conditional re-fetch on ``refetchConfig``; ignore every other type.
+        lastModified is forwarded only so a deferred re-fetch can be dropped (providers.md 2.1.1)."""
+        if msg.type != TYPE_REFETCH_CONFIG:
+            log.debug(
+                "ignoring SSE message of type %r (server provider only handles %r)",
+                msg.type,
+                TYPE_REFETCH_CONFIG,
+            )
+            return
+        with self._lock:
+            if source is None or source is not self._sse_manager:
+                return
+            poller = self._poller
+        log.debug(
+            "SSE refetchConfig received; triggering CDN re-fetch (lastModified=%s)",
+            msg.last_modified,
+        )
+        if poller is not None:
+            poller.request_out_of_band_fetch(msg.last_modified)
 
     def _start_grace_timer(self) -> None:
         self._cancel_grace_timer()

@@ -3,14 +3,11 @@ from collections.abc import Callable, Iterator
 import pytest
 from mock_server import MockServer
 
-# needs an SSE-triggered re-fetch; SSE support is on hold
-_SKIPPED_TAGS = {"single-flight"}
-
 
 def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> bool:
     # gherkin tags are not registered pytest markers, so skip or ignore them rather than mark
-    if tag in _SKIPPED_TAGS:
-        pytest.mark.skip(reason=f"@{tag} is not supported yet")(function)
+    # if tag in _SKIPPED_TAGS:
+    #     pytest.mark.skip(reason=f"@{tag} is not supported yet")(function)
     return True
 
 

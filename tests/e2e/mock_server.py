@@ -18,6 +18,8 @@ from testcontainers.core.wait_strategies import HttpWaitStrategy
 
 # harness submodule at the repo root
 HARNESS_DIR = Path(__file__).resolve().parents[2] / "fm-provider-test-harness"
+# the only path the mock server serves an SSE stream on
+SSE_PATH = "/sse"
 
 # image repository; the tag comes from the pinned harness's version.txt
 IMAGE_REPO = "ghcr.io/dynatrace/fm-provider-mock-server"
@@ -147,12 +149,46 @@ class MockServer:
         """Return how many CDN requests were received since the last reset."""
         return len(self.fetch_cdn_requests())
 
+    def sse_client_count(self) -> int:
+        """Return how many SSE subscribers are currently connected."""
+        payload = self.send_control_request("GET", "/__control__/sse/clients").json()
+        return int(payload["clients"])
+
+    def drop_sse(self, outage: float | None = None) -> None:
+        """Drop every SSE subscriber and refuse new connections.
+
+        With no outage they stay refused until restore_sse() or reset();
+        otherwise for outage seconds, after which reconnects succeed again.
+        """
+        body = None if outage is None else {"reconnectSeconds": outage}
+        self.send_control_request("POST", "/__control__/sse/disconnect", body)
+
+    def restore_sse(self) -> None:
+        """End an outage opened by drop_sse() so the next reconnect attempt succeeds."""
+        self.send_control_request(
+            "POST", "/__control__/sse/disconnect", {"reconnectSeconds": 0}
+        )
+
+    def emit_sse(self, payload: str) -> None:
+        """Broadcast payload verbatim as the data: line of an SSE event to every subscriber."""
+        # raw rather than JSON-encoded, so an unparseable payload reaches the wire as written
+        self.send_control_request("POST", "/__control__/sse/emit", raw=payload)
+
     def send_control_request(
-        self, method: str, path: str, body: typing.Any = None
+        self,
+        method: str,
+        path: str,
+        body: typing.Any = None,
+        *,
+        raw: str | None = None,
     ) -> requests.Response:
         """Call a control-plane endpoint, failing on any non-2xx status."""
         res = self._http.request(
-            method, self.origin + path, json=body, timeout=CONTROL_REQUEST_TIMEOUT
+            method,
+            self.origin + path,
+            json=body,
+            data=None if raw is None else raw.encode(),
+            timeout=CONTROL_REQUEST_TIMEOUT,
         )
         res.raise_for_status()
         return res
