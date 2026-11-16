@@ -156,8 +156,8 @@ class TestSseManager:
         rec = _Recorder()
         manager = _start(sse_server.url, rec)
         assert wait_until(lambda: rec.connected == 1)
-        # the server sends nothing, so the reader stays in recv(); on Windows the library's close()
-        # would block on it, so stop() must not wait for the close
+        # the server sends nothing, so the reader stays in recv(); the library must wake it rather than
+        # wait for it, since stop() runs under the provider's lock
         t0 = time.monotonic()
         manager.stop()
         assert time.monotonic() - t0 < 0.5, "stop() blocked on the SSE close"
