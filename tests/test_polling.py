@@ -502,7 +502,7 @@ class TestPollingManagerSseRefetch:
             time.sleep(0.1)
             # re-issuing a skipped re-fetch at once would only be skipped again and spin
             assert len(seen) == 1
-            assert pm._pending_last_modified == _LM_EPOCH
+            assert pm._pending_sse_refetch_at == _LM_EPOCH
             # the next fetch that makes a request issues the kept one after it
             pm.request_out_of_band_fetch(None)
             assert _wait_until(lambda: len(seen) == 3)
