@@ -108,6 +108,11 @@ class DynatraceProvider(AbstractProvider):
             self._metrics_aggregator, on_record=self._metrics_flusher.on_record
         )
 
+    @property
+    def _init_started(self) -> bool:
+        """Whether initialize() has run since the last shutdown(); its poller runs on both outcomes. Caller holds ``_lock``."""
+        return self._poller is not None
+
     def get_metadata(self) -> Metadata:
         return Metadata(name=_PROVIDER_NAME)
 
@@ -115,12 +120,15 @@ class DynatraceProvider(AbstractProvider):
         return [self._metrics_hook]
 
     def initialize(self, evaluation_context: EvaluationContext | None = None) -> None:
+        with self._lock:
+            if self._init_started:
+                log.debug("provider already initialized; ignoring initialize()")
+                return
+            self._generation += 1
+            generation = self._generation
         log.info("initializing Dynatrace provider (key=%s)", self._options.public_key)
         if not self._sse_enabled:
             log.debug("SSE disabled by configuration; running in polling-only mode")
-        with self._lock:
-            self._generation += 1
-            generation = self._generation
 
         body = self._fetch_initial_body(generation)
 

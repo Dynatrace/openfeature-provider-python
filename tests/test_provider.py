@@ -359,6 +359,45 @@ class _BlockingFetcher:
 
 
 class TestInitShutdownRace:
+    @rsps_lib.activate
+    def test_repeated_initialize_is_a_no_op(self) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
+        p = _make_provider()
+        p.initialize()
+        poller = p._poller
+        p.initialize()
+        # no second fetch, and the running poller is kept
+        assert len(rsps_lib.calls) == 1
+        assert p._poller is poller
+        assert p._state == ProviderStatus.READY
+        p.shutdown()
+
+    @rsps_lib.activate
+    def test_repeated_initialize_while_recovering_is_a_no_op(self) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        p = _make_provider()
+        with pytest.raises(GeneralError, match="HTTP 500"):
+            p.initialize()
+        poller = p._poller
+        requests_before = len(rsps_lib.calls)
+        p.initialize()
+        # the recovery poller keeps running; no second initial fetch
+        assert len(rsps_lib.calls) == requests_before
+        assert p._poller is poller
+        assert p._state == ProviderStatus.ERROR
+        p.shutdown()
+
+    @rsps_lib.activate
+    def test_initialize_after_shutdown_runs_again(self) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_FIXTURE.read_text(), status=200)
+        p = _make_provider()
+        p.initialize()
+        p.shutdown()
+        p.initialize()
+        assert len(rsps_lib.calls) == 2
+        assert p._state == ProviderStatus.READY
+        p.shutdown()
+
     def test_shutdown_during_initialize_is_not_overwritten(self) -> None:
         fetcher = _BlockingFetcher(_FIXTURE.read_text())
         p = DynatraceProvider(_KEY, fetcher=fetcher, poll_interval_s=600.0)
