@@ -34,6 +34,7 @@ jobs:
         environment: publish
         permissions:
             contents: read
+            id-token: write
         if: ${{ fromJSON(needs.release-please.outputs.release_created || false) }}
 
         steps:
@@ -47,5 +48,4 @@ jobs:
 
             - uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
               with:
-                  password: ${{ secrets.PYPI_PUBLISH_TOKEN }}
                   attestations: false # this can be made true once our repo is public

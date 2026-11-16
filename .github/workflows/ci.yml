@@ -77,3 +77,13 @@ jobs:
             - run: uv sync --locked
 
             - run: uv run pre-commit run --all-files
+
+    # single required check for branch protection; keeps job/matrix renames out of the registry
+    ci-passed:
+        name: CI Passed
+        if: always()
+        needs: [build, e2e, pre-commit]
+        runs-on: ubuntu-latest
+        steps:
+            - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+              run: exit 1
