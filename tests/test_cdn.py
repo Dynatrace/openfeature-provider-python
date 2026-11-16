@@ -55,7 +55,7 @@ class TestParseRetryAfterMs:
 
 class TestCdnFetcherResponses:
     @rsps_lib.activate
-    def test_200_stores_etag_and_last_modified(self) -> None:
+    def test_200_returns_etag_and_last_modified(self) -> None:
         rsps_lib.add(
             rsps_lib.GET,
             _CDN_URL,
@@ -78,6 +78,7 @@ class TestCdnFetcherResponses:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=304)
         f = _fetcher()
         f.fetch()
+        f.commit()
         result = f.fetch()
         assert result.is_not_modified
         assert rsps_lib.calls[1].request.headers.get("If-None-Match") == _ETAG
@@ -94,9 +95,48 @@ class TestCdnFetcherResponses:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=304)
         f = _fetcher()
         f.fetch()
+        f.commit()
         result = f.fetch()
         assert result.is_not_modified
         assert result.etag == _ETAG
+
+    # a 2xx whose body the caller never applied must not replace the validators in force
+    @rsps_lib.activate
+    def test_uncommitted_200_keeps_the_previous_validators(self) -> None:
+        rsps_lib.add(
+            rsps_lib.GET, _CDN_URL, body=_BODY, status=200, headers={"ETag": _ETAG}
+        )
+        rsps_lib.add(
+            rsps_lib.GET, _CDN_URL, body="", status=200, headers={"ETag": '"v2"'}
+        )
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=304)
+        f = _fetcher()
+        f.fetch()
+        f.commit()
+        f.fetch()
+        f.fetch()
+        assert rsps_lib.calls[2].request.headers.get("If-None-Match") == _ETAG
+
+    @rsps_lib.activate
+    def test_is_newer_than_committed(self) -> None:
+        rsps_lib.add(
+            rsps_lib.GET,
+            _CDN_URL,
+            body=_BODY,
+            status=200,
+            headers={"Last-Modified": _LM_NEW},
+        )
+        f = _fetcher()
+        # nothing committed yet, so any Last-Modified is newer
+        assert f.is_newer_than_committed(0)
+        result = f.fetch()
+        committed = result.last_modified_epoch_s
+        assert committed is not None
+        # fetched but not committed
+        assert f.is_newer_than_committed(committed)
+        f.commit()
+        assert not f.is_newer_than_committed(committed)
+        assert f.is_newer_than_committed(committed + 1)
 
     @rsps_lib.activate
     def test_429_with_seconds_sets_rate_limit(self) -> None:
@@ -160,6 +200,7 @@ class TestCdnFetcherResponses:
         )
         f = _fetcher()
         f.fetch()
+        f.commit()
         result = f.fetch()
         assert result.is_not_modified
 
@@ -175,6 +216,7 @@ class TestCdnFetcherResponses:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body="new", status=200)
         f = _fetcher()
         f.fetch()
+        f.commit()
         result = f.fetch()
         assert result.is_success
         assert result.body == "new"

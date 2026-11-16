@@ -130,6 +130,7 @@ class DynatraceProvider(AbstractProvider):
             # not just ParseError: a non-JSON body raises JSONDecodeError, which must still leave a recoverable provider
             self._fail_initialization(generation, f"invalid config: {exc}")
             raise GeneralError(f"initial CDN config is invalid: {exc}") from exc
+        self._fetcher.commit()
 
         # set the aggregator version eagerly so it is authoritative before any evaluation is recorded
         self._update_metrics_version_from_flag_set()
@@ -187,6 +188,8 @@ class DynatraceProvider(AbstractProvider):
         self._poller = PollingManager(
             fetch_flags=self._fetcher.fetch,
             store_flags=self._store_flags,
+            commit_fetch=self._fetcher.commit,
+            is_newer_than_applied=self._fetcher.is_newer_than_committed,
             emit_change=self._on_configuration_changed,
             emit_success=self._on_fetch_success,
             emit_failure=self._on_fetch_failure,
@@ -266,7 +269,7 @@ class DynatraceProvider(AbstractProvider):
                     "not starting recovery poller"
                 )
                 return
-            # nothing was applied, so cached validators would let the recovery poll 304 its way to READY over an empty store
+            # a previous lifecycle's validators would let the recovery poll 304 its way to READY over an empty store
             self._fetcher.invalidate_cache()
             log.warning("initialization failed (%s); polling for recovery", reason)
             self._state = ProviderStatus.ERROR
@@ -355,12 +358,7 @@ class DynatraceProvider(AbstractProvider):
         sealed = self._metrics_aggregator.drain()
         self._metrics_flusher.enqueue_sealed_batch(sealed)
         self._metrics_flusher.trigger_flush()
-        try:
-            changed = self._flagd_core.set_flags_and_get_changed_keys(body)
-        except Exception:
-            # fetched but not applied, so its validators would make the next poll a 304 over the previous config
-            self._fetcher.invalidate_cache()
-            raise
+        changed = self._flagd_core.set_flags_and_get_changed_keys(body)
         self._update_metrics_version_from_flag_set()
         with self._lock:
             # every stored config may open, rotate or withdraw the stream, including the first one after a failed init;

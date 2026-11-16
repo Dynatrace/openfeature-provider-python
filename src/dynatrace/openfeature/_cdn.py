@@ -81,6 +81,7 @@ class CdnFetcher:
         self._session = requests.Session()
         self._clock: Callable[[], float] = clock or time.time
         self._cache = _CacheState()
+        self._pending_cache: _CacheState | None = None
         self._rate_limited_until: float = 0.0
         self._fetch_lock = threading.RLock()
 
@@ -88,15 +89,27 @@ class CdnFetcher:
         t = now if now is not None else self._clock()
         return t < self._rate_limited_until
 
-    def invalidate_cache(self) -> None:
-        """Forget the cached validators.
+    def is_newer_than_committed(self, last_modified_epoch_s: float) -> bool:
+        """Whether a Last-Modified is newer than the config in force; true if that config is undated."""
+        committed = self._cache.last_modified_at
+        return committed is None or last_modified_epoch_s > committed.timestamp()
 
-        They are stored as soon as a 2xx arrives, before the caller applies the
-        body. If applying it fails they describe a config we never loaded, and
-        the next conditional request would come back 304 over an empty store.
+    def commit(self) -> None:
+        """Promote the validators staged by the last successful fetch.
+
+        Call this only once the body has been applied. Until then the previous validators stay in
+        force, so a body that is empty or fails to apply is re-requested in full instead of being
+        answered with a 304.
         """
-        with self._fetch_lock:
-            self._cache = _CacheState()
+        pending = self._pending_cache
+        if pending is not None:
+            self._cache = pending
+            self._pending_cache = None
+
+    def invalidate_cache(self) -> None:
+        """Forget the validators, so the next fetch is unconditional."""
+        self._cache = _CacheState()
+        self._pending_cache = None
 
     def fetch(self, cancel: threading.Event | None = None) -> FetchResult:
         """Fetch the config, or skip without making a request.
@@ -105,8 +118,7 @@ class CdnFetcher:
         section 2.3) is neither success nor failure and must not be reported as
         either. PollingManager serialises its own fetches, so the in-flight
         guard is for callers outside it -- initialize() fetches on the caller's
-        thread -- and it keeps a conditional request from storing an ETag and a
-        Last-Modified that came from different responses.
+        thread.
         """
         if self.is_rate_limited():
             log.debug("rate limited; skipping fetch")
@@ -125,6 +137,7 @@ class CdnFetcher:
             self._fetch_lock.release()
 
     def _do_fetch(self) -> FetchResult:
+        self._pending_cache = None
         cache = self._cache
         headers: dict[str, str] = {}
         if cache.etag is not None:
@@ -175,7 +188,7 @@ class CdnFetcher:
                     cache.last_modified_header,
                 )
                 return FetchResult(304, None, cache.etag, cache.last_modified_header)
-            self._cache = _CacheState(
+            self._pending_cache = _CacheState(
                 etag=new_etag,
                 last_modified_header=new_last_modified,
                 last_modified_at=new_lm_at,

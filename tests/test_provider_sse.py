@@ -212,6 +212,12 @@ class _BlockingFetcher:
         self.release.wait(timeout=5.0)
         return FetchResult(200, self._body, None, None)
 
+    def commit(self) -> None:
+        pass
+
+    def is_newer_than_committed(self, last_modified_epoch_s: float) -> bool:
+        return True
+
     def invalidate_cache(self) -> None:
         pass
 

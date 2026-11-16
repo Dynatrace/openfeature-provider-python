@@ -143,8 +143,9 @@ class TestInitialize:
         assert rsps_lib.calls[1].request.headers.get("If-None-Match") is None
         p.shutdown()
 
+    @pytest.mark.parametrize("body", ['{"flags": 5}', ""], ids=["invalid", "empty"])
     @rsps_lib.activate
-    def test_rejected_poll_config_does_not_leave_validators_behind(self) -> None:
+    def test_rejected_poll_config_keeps_the_applied_validators(self, body: str) -> None:
         rsps_lib.add(
             rsps_lib.GET,
             _CDN_URL,
@@ -155,7 +156,7 @@ class TestInitialize:
         rsps_lib.add(
             rsps_lib.GET,
             _CDN_URL,
-            body='{"flags": 5}',
+            body=body,
             status=200,
             headers={"ETag": '"v2"'},
         )
@@ -166,8 +167,8 @@ class TestInitialize:
         while time.monotonic() < deadline and len(rsps_lib.calls) < 3:
             time.sleep(0.02)
         assert len(rsps_lib.calls) >= 3
-        # second poll re-requests the body instead of revalidating the rejected config
-        assert rsps_lib.calls[2].request.headers.get("If-None-Match") is None
+        # the next poll revalidates the applied config, not the rejected one
+        assert rsps_lib.calls[2].request.headers.get("If-None-Match") == '"v1"'
         p.shutdown()
 
 
@@ -352,6 +353,9 @@ class _BlockingFetcher:
         self.fetch_started.set()
         self.release.wait(timeout=5.0)
         return FetchResult(200, self._body, None, None)
+
+    def commit(self) -> None:
+        pass
 
 
 class TestInitShutdownRace:

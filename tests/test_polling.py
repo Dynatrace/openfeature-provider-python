@@ -20,18 +20,41 @@ def _make_pm(
     fetch_fn=None,
     changed_keys: list[str] | None = None,
     interval_s: float = _FAST_INTERVAL,
+    store_error: Exception | None = None,
 ) -> tuple[PollingManager, dict[str, list[object]]]:
     calls: dict[str, list[object]] = {
         "store": [],
+        "commit": [],
         "change": [],
         "success": [],
         "failure": [],
     }
     if fetch_fn is None:
         fetch_fn = lambda cancel=None: fetch_result  # noqa: E731
+    inner_fetch = fetch_fn
+    # mirrors CdnFetcher: a fetch stages its result, commit promotes it
+    staged: list[FetchResult] = []
+
+    def fetch(cancel=None) -> FetchResult:
+        result = inner_fetch(cancel)
+        staged[:] = [result]
+        return result
+
+    def store(body: str) -> list[str]:
+        calls["store"].append(body)
+        if store_error is not None:
+            raise store_error
+        return changed_keys or []
+
+    def is_newer_than_applied(last_modified: float) -> bool:
+        applied = calls["commit"][-1].last_modified_epoch_s if calls["commit"] else None  # type: ignore[attr-defined]
+        return applied is None or last_modified > applied
+
     pm = PollingManager(
-        fetch_flags=fetch_fn,
-        store_flags=lambda body: (calls["store"].append(body), changed_keys or [])[1],
+        fetch_flags=fetch,
+        store_flags=store,
+        commit_fetch=lambda: calls["commit"].extend(staged),
+        is_newer_than_applied=is_newer_than_applied,
         emit_change=lambda keys: calls["change"].append(keys),
         emit_success=lambda: calls["success"].append(True),
         emit_failure=lambda reason: calls["failure"].append(reason),
@@ -68,9 +91,17 @@ class TestPollingManagerPoll:
         pm, calls = _make_pm(result, changed_keys=changed_keys)
         pm._poll()
         assert calls["store"] == store
+        # validators are committed only once the body is stored
+        assert calls["commit"] == ([result] if store else [])
         assert calls["success"] == success
         assert calls["failure"] == failure
         assert calls["change"] == change
+
+    def test_store_failure_does_not_commit(self) -> None:
+        pm, calls = _make_pm(_200, store_error=ValueError("bad config"))
+        pm._poll()
+        assert calls["commit"] == []
+        assert calls["failure"] == ["ValueError"]
 
     def test_exception_emits_failure(self) -> None:
         def boom(cancel=None):
@@ -117,6 +148,8 @@ class TestPollingManagerSingleFlight:
         pm = PollingManager(
             fetch_flags=fetch,
             store_flags=lambda _: [],
+            commit_fetch=lambda: None,
+            is_newer_than_applied=lambda _: True,
             emit_change=lambda _: None,
             emit_success=lambda: emitted.append("success"),
             emit_failure=lambda r: emitted.append(f"failure:{r}"),
@@ -149,6 +182,8 @@ class TestPollingManagerSingleFlight:
         pm = PollingManager(
             fetch_flags=fetch,
             store_flags=lambda _: [],
+            commit_fetch=lambda: None,
+            is_newer_than_applied=lambda _: True,
             emit_change=lambda _: None,
             emit_success=lambda: None,
             emit_failure=lambda _: None,
@@ -167,6 +202,8 @@ class TestPollingManagerThreading:
         pm = PollingManager(
             fetch_flags=lambda cancel=None: (_304, fired.set())[0],
             store_flags=lambda _: [],
+            commit_fetch=lambda: None,
+            is_newer_than_applied=lambda _: True,
             emit_change=lambda _: None,
             emit_success=lambda: None,
             emit_failure=lambda _: None,
@@ -191,6 +228,8 @@ class TestPollingManagerThreading:
         pm = PollingManager(
             fetch_flags=fetch,
             store_flags=lambda _: [],
+            commit_fetch=lambda: None,
+            is_newer_than_applied=lambda _: True,
             emit_change=lambda _: None,
             emit_success=lambda: None,
             emit_failure=lambda _: None,
@@ -213,6 +252,8 @@ class TestPollingManagerThreading:
         pm = PollingManager(
             fetch_flags=fetch,
             store_flags=lambda _: [],
+            commit_fetch=lambda: None,
+            is_newer_than_applied=lambda _: True,
             emit_change=lambda _: None,
             emit_success=lambda: None,
             emit_failure=lambda r: failures.append(r),
@@ -235,6 +276,8 @@ class TestPollingManagerThreading:
         pm = PollingManager(
             fetch_flags=fetch,
             store_flags=lambda _: [],
+            commit_fetch=lambda: None,
+            is_newer_than_applied=lambda _: True,
             emit_change=lambda _: None,
             emit_success=lambda: None,
             emit_failure=lambda _: None,
@@ -387,6 +430,31 @@ class TestPollingManagerSseRefetch:
             pm.request_out_of_band_fetch(announced)
             fetch.release.set()
             assert _wait_until(lambda: fetch.calls == 2)
+        finally:
+            pm.stop()
+
+    # the completed fetch is as new as announced, but its body never applied, so the re-fetch still runs
+    @pytest.mark.parametrize(
+        ("body", "store_error"),
+        [("", None), ('{"flags":{}}', ValueError("bad config"))],
+        ids=["empty-body", "store-failed"],
+    )
+    def test_deferred_refetch_issued_when_completed_fetch_did_not_apply(
+        self, body: str, store_error: Exception | None
+    ) -> None:
+        unapplied = FetchResult(200, body, None, _LM_HEADER)
+        fetch = _GatedFetch([unapplied, _304])
+        pm, calls = _make_pm(
+            fetch_fn=fetch, interval_s=_LONG_INTERVAL, store_error=store_error
+        )
+        pm.start()
+        try:
+            pm.request_out_of_band_fetch(None)
+            assert fetch.first_started.wait(1.0)
+            pm.request_out_of_band_fetch(_LM_EPOCH)
+            fetch.release.set()
+            assert _wait_until(lambda: fetch.calls == 2)
+            assert calls["commit"] == []
         finally:
             pm.stop()
 

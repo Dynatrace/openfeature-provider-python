@@ -25,6 +25,8 @@ class PollingManager:
         self,
         fetch_flags: Callable[[threading.Event | None], FetchResult],
         store_flags: Callable[[str], list[str]],
+        commit_fetch: Callable[[], None],
+        is_newer_than_applied: Callable[[float], bool],
         emit_change: Callable[[list[str]], None],
         emit_success: Callable[[], None],
         emit_failure: Callable[[str], None],
@@ -32,6 +34,8 @@ class PollingManager:
     ) -> None:
         self._fetch_flags = fetch_flags
         self._store_flags = store_flags
+        self._commit_fetch = commit_fetch
+        self._is_newer_than_applied = is_newer_than_applied
         self._emit_change = emit_change
         self._emit_success = emit_success
         self._emit_failure = emit_failure
@@ -86,7 +90,7 @@ class PollingManager:
         self, announced_last_modified: float | None = None
     ) -> None:
         """Fetch now if the slot is free, else defer and coalesce; never disturbs the cadence.
-        A deferred re-fetch is dropped only if a completed fetch is at least as new as announced."""
+        A deferred re-fetch is dropped only if the applied config is at least as new as announced."""
         announced = (
             _LAST_MODIFIED_UNKNOWN
             if announced_last_modified is None
@@ -180,16 +184,11 @@ class PollingManager:
             return False
         self._pending_last_modified = None
 
-        observed = completed.last_modified_epoch_s if completed is not None else None
-        if (
-            pending != _LAST_MODIFIED_UNKNOWN
-            and observed is not None
-            and observed >= pending
+        if pending != _LAST_MODIFIED_UNKNOWN and not self._is_newer_than_applied(
+            pending
         ):
             log.debug(
-                "dropping deferred SSE re-fetch: completed fetch already returned "
-                "Last-Modified %s >= pending %s",
-                observed,
+                "dropping deferred SSE re-fetch: applied config is at least as new as %s",
                 pending,
             )
             return False
@@ -243,6 +242,7 @@ class PollingManager:
             return
 
         changed_keys = self._store_flags(body)
+        self._commit_fetch()
         self._emit_success()
 
         if changed_keys:
