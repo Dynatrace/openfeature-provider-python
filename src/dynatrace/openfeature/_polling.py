@@ -87,14 +87,14 @@ class PollingManager:
     ) -> None:
         """Fetch now if the slot is free, else defer and coalesce; never disturbs the cadence.
         A deferred re-fetch is dropped only if a completed fetch is at least as new as announced."""
-        if self._stop_event.is_set():
-            return
         announced = (
             _LAST_MODIFIED_UNKNOWN
             if announced_last_modified is None
             else announced_last_modified
         )
         with self._cond:
+            if self._stop_event.is_set():
+                return
             if self._in_flight:
                 self._pending_last_modified = (
                     announced
