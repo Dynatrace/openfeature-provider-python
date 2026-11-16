@@ -325,7 +325,7 @@ class TestPollingManagerSseRefetch:
         pm, calls = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
         pm.start()
         try:
-            pm.trigger_immediate_fetch(_LM_EPOCH)
+            pm.request_out_of_band_fetch(_LM_EPOCH)
             assert _wait_until(lambda: calls["success"] == [True])
             assert fetch.calls == 1
         finally:
@@ -336,10 +336,10 @@ class TestPollingManagerSseRefetch:
         pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
         pm.start()
         try:
-            pm.trigger_immediate_fetch(None)
+            pm.request_out_of_band_fetch(None)
             assert fetch.first_started.wait(1.0)
-            pm.trigger_immediate_fetch(_LM_EPOCH)
-            pm.trigger_immediate_fetch(_LM_EPOCH + 60)
+            pm.request_out_of_band_fetch(_LM_EPOCH)
+            pm.request_out_of_band_fetch(_LM_EPOCH + 60)
             assert fetch.calls == 1, "a contended re-fetch must not overlap"
             fetch.release.set()
             assert _wait_until(lambda: fetch.calls == 2)
@@ -355,9 +355,9 @@ class TestPollingManagerSseRefetch:
         pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
         pm.start()
         try:
-            pm.trigger_immediate_fetch(None)
+            pm.request_out_of_band_fetch(None)
             assert fetch.first_started.wait(1.0)
-            pm.trigger_immediate_fetch(_LM_EPOCH)
+            pm.request_out_of_band_fetch(_LM_EPOCH)
             fetch.release.set()
             time.sleep(0.2)
             assert fetch.calls == 1
@@ -382,9 +382,9 @@ class TestPollingManagerSseRefetch:
         pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
         pm.start()
         try:
-            pm.trigger_immediate_fetch(None)
+            pm.request_out_of_band_fetch(None)
             assert fetch.first_started.wait(1.0)
-            pm.trigger_immediate_fetch(announced)
+            pm.request_out_of_band_fetch(announced)
             fetch.release.set()
             assert _wait_until(lambda: fetch.calls == 2)
         finally:
@@ -406,9 +406,9 @@ class TestPollingManagerSseRefetch:
         pm, calls = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
         pm.start()
         try:
-            pm.trigger_immediate_fetch(_LM_EPOCH)
+            pm.request_out_of_band_fetch(_LM_EPOCH)
             assert started.wait(1.0)
-            pm.trigger_immediate_fetch(_LM_EPOCH)
+            pm.request_out_of_band_fetch(_LM_EPOCH)
             gate.set()
             assert _wait_until(lambda: calls["success"] == [True])
             assert calls["failure"] == ["OSError"]
@@ -429,14 +429,14 @@ class TestPollingManagerSseRefetch:
         pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
         pm.start()
         try:
-            pm.trigger_immediate_fetch(_LM_EPOCH)
+            pm.request_out_of_band_fetch(_LM_EPOCH)
             assert _wait_until(lambda: len(seen) == 1)
             time.sleep(0.1)
             # re-issuing a skipped re-fetch at once would only be skipped again and spin
             assert len(seen) == 1
-            assert pm._pending_sse_fetch_last_modified == _LM_EPOCH
+            assert pm._pending_last_modified == _LM_EPOCH
             # the next fetch that makes a request issues the kept one after it
-            pm.trigger_immediate_fetch(None)
+            pm.request_out_of_band_fetch(None)
             assert _wait_until(lambda: len(seen) == 3)
         finally:
             pm.stop()
@@ -447,7 +447,7 @@ class TestPollingManagerSseRefetch:
         pm.start()
         try:
             assert fetch.first_started.wait(1.0)
-            pm.trigger_immediate_fetch(_LM_EPOCH)
+            pm.request_out_of_band_fetch(_LM_EPOCH)
             # ticks keep firing while the first fetch is blocked
             time.sleep(_FAST_INTERVAL * 4)
             assert fetch.calls == 1
@@ -462,6 +462,6 @@ class TestPollingManagerSseRefetch:
         pm, _ = _make_pm(fetch_fn=fetch, interval_s=_LONG_INTERVAL)
         pm.start()
         pm.stop()
-        pm.trigger_immediate_fetch(_LM_EPOCH)
+        pm.request_out_of_band_fetch(_LM_EPOCH)
         time.sleep(0.1)
         assert fetch.calls == 0

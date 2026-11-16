@@ -703,10 +703,11 @@ def _register_provider_with_sdk(scenario: Scenario) -> None:
         metrics_origin=scenario.mock.origin,
         metrics_flush_interval_s=METRICS_FLUSH_INTERVAL,
         # the harness's shortened timings, so SSE scenarios finish in reasonable time
-        sse_connected_poll_interval_s=SSE_CONNECTED_POLL_INTERVAL,
         grace_period_s=GRACE_PERIOD,
         disable_sse=not scenario.sse_enabled,
     )
+    # fixed by the spec, so not a constructor parameter; set before set_provider() runs initialize()
+    scenario.provider._sse_connected_poll_interval_s = SSE_CONNECTED_POLL_INTERVAL
     api.set_provider(scenario.provider, scenario.domain)
     # set_provider runs initialize inline and reports failure as PROVIDER_ERROR rather than raising
     status = scenario.client.get_provider_status()
@@ -786,7 +787,7 @@ def _trigger_sse_refetch(scenario: Scenario) -> None:
     assert scenario.provider is not None, "provider has not been initialized"
     poller = scenario.provider._poller
     assert poller is not None, "provider has no polling manager"
-    poller.trigger_immediate_fetch(None)
+    poller.request_out_of_band_fetch(None)
 
 
 def _unquote(value: str) -> str:

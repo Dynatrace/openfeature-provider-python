@@ -44,9 +44,9 @@ class PollingManager:
         # set from submit until the fetch has settled (not until its thread exits), so no trigger defers behind a settled fetch
         self._in_flight = False
         # last-modified value of a deferred SSE re-fetch, or None when none is pending
-        self._pending_sse_fetch_last_modified: float | None = None
+        self._pending_last_modified: float | None = None
         # last-modified value of the current (in-flight) SSE-triggered fetch, or None if poll-triggered
-        self._in_flight_sse_fetch_last_modified: float | None = None
+        self._in_flight_last_modified: float | None = None
 
     @property
     def interval_s(self) -> float:
@@ -68,7 +68,7 @@ class PollingManager:
         # stop event doubles as the fetch cancel signal, so an in-flight poll abandons its backoff
         self._stop_event.set()
         with self._cond:
-            self._pending_sse_fetch_last_modified = None
+            self._pending_last_modified = None
             self._cond.notify_all()
         if self._ticker_thread is not None:
             self._ticker_thread.join(timeout=2.0)
@@ -82,7 +82,7 @@ class PollingManager:
             self._rescheduled = True
             self._cond.notify_all()
 
-    def trigger_immediate_fetch(
+    def request_out_of_band_fetch(
         self, announced_last_modified: float | None = None
     ) -> None:
         """Fetch now if the slot is free, else defer and coalesce; never disturbs the cadence.
@@ -96,10 +96,10 @@ class PollingManager:
         )
         with self._cond:
             if self._in_flight:
-                self._pending_sse_fetch_last_modified = (
+                self._pending_last_modified = (
                     announced
-                    if self._pending_sse_fetch_last_modified is None
-                    else max(self._pending_sse_fetch_last_modified, announced)
+                    if self._pending_last_modified is None
+                    else max(self._pending_last_modified, announced)
                 )
                 log.debug(
                     "fetch in flight; deferring SSE re-fetch (lastModified=%s)",
@@ -136,8 +136,8 @@ class PollingManager:
             return
         self._submit_locked(None)
 
-    def _submit_locked(self, sse_refetch_at: float | None) -> None:
-        self._in_flight_sse_fetch_last_modified = sse_refetch_at
+    def _submit_locked(self, last_modified: float | None) -> None:
+        self._in_flight_last_modified = last_modified
         self._in_flight = True
         threading.Thread(
             target=self._run_fetches,
@@ -159,27 +159,26 @@ class PollingManager:
     def _on_fetch_complete_locked(self, completed: FetchResult | None) -> bool:
         """Settle the SSE re-fetch bookkeeping; return True to issue the pending re-fetch now.
         ``completed`` is the finished fetch's result, or None if it raised."""
-        issued_for = self._in_flight_sse_fetch_last_modified
-        self._in_flight_sse_fetch_last_modified = None
-        # frees the slot before anything below can re-claim it
+        previous_in_flight = self._in_flight_last_modified
+        self._in_flight_last_modified = None
         self._in_flight = False
 
         if completed is not None and completed.skipped:
             # no request was made, so a re-fetch we issued is still unsatisfied; put it back rather than re-issue it,
             # which would just be skipped again (the Retry-After window or fetch lock still holds) and spin
-            if issued_for is not None:
-                self._pending_sse_fetch_last_modified = (
-                    issued_for
-                    if self._pending_sse_fetch_last_modified is None
-                    else max(self._pending_sse_fetch_last_modified, issued_for)
+            if previous_in_flight is not None:
+                self._pending_last_modified = (
+                    previous_in_flight
+                    if self._pending_last_modified is None
+                    else max(self._pending_last_modified, previous_in_flight)
                 )
                 log.debug("SSE re-fetch made no request; keeping it pending")
             return False
 
-        pending = self._pending_sse_fetch_last_modified
+        pending = self._pending_last_modified
         if pending is None or self._stop_event.is_set():
             return False
-        self._pending_sse_fetch_last_modified = None
+        self._pending_last_modified = None
 
         observed = completed.last_modified_epoch_s if completed is not None else None
         if (
@@ -195,7 +194,7 @@ class PollingManager:
             )
             return False
         log.debug("issuing deferred SSE re-fetch")
-        self._in_flight_sse_fetch_last_modified = pending
+        self._in_flight_last_modified = pending
         self._in_flight = True
         return True
 

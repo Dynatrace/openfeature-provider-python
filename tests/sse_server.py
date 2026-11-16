@@ -36,16 +36,16 @@ class _SseHandler(BaseHTTPRequestHandler):
             self.send_error(503)
             self.close_connection = True
             return
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Transfer-Encoding", "chunked")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.wfile.flush()
         events: queue.Queue[bytes | None] = queue.Queue()
         owner.register(events)
         try:
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.flush()
             self._stream(events)
         except OSError:
             pass  # client went away mid-write

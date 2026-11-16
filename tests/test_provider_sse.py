@@ -31,14 +31,15 @@ def _flag_config(sse_url: str | None = None) -> str:
 def _make_provider(
     *, poll_s: float = _DISCONNECTED_S, grace_s: float = 60.0, disable_sse: bool = False
 ) -> DynatraceProvider:
-    return DynatraceProvider(
+    provider = DynatraceProvider(
         _KEY,
         fetcher=CdnFetcher(DynatraceProviderOptions.from_sdk_key(_KEY)),
         poll_interval_s=poll_s,
-        sse_connected_poll_interval_s=_CONNECTED_S,
         disable_sse=disable_sse,
         grace_period_s=grace_s,
     )
+    provider._sse_connected_poll_interval_s = _CONNECTED_S
+    return provider
 
 
 def _record_events(p: DynatraceProvider) -> list[str]:
@@ -98,7 +99,7 @@ class TestSseStartup:
             assert wait_until(lambda: _cdn_calls() == 2), "no catch-up fetch on connect"
             assert provider._sse_connected
             assert provider._poller is not None
-            assert provider._poller.interval_s == _CONNECTED_S
+            assert wait_until(lambda: provider._poller.interval_s == _CONNECTED_S)
         finally:
             provider.shutdown()
 
@@ -204,14 +205,75 @@ class _BlockingFetcher:
 
 class TestSseConnectionLifecycle:
     @rsps_lib.activate
-    def test_connect_switches_cadence_and_pulls_catch_up(self) -> None:
+    def test_connect_alone_keeps_the_normal_cadence(self) -> None:
+        provider, fake = _ready_provider_with_fake_sse()
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=304)
+        try:
+            # holding the lock keeps the catch-up's success callback from running yet
+            with provider._lock:
+                provider._on_sse_connected(fake)  # type: ignore[arg-type]
+                assert provider._sse_connected
+                assert provider._poller is not None
+                assert provider._poller.interval_s == _DISCONNECTED_S
+        finally:
+            provider.shutdown()
+
+    @rsps_lib.activate
+    def test_catch_up_success_relaxes_the_cadence(self) -> None:
         provider, fake = _ready_provider_with_fake_sse()
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=304)
         try:
             provider._on_sse_connected(fake)  # type: ignore[arg-type]
-            assert provider._poller is not None
-            assert provider._poller.interval_s == _CONNECTED_S
             assert wait_until(lambda: _cdn_calls() == 2)
+            assert provider._poller is not None
+            assert wait_until(lambda: provider._poller.interval_s == _CONNECTED_S)
+        finally:
+            provider.shutdown()
+
+    @rsps_lib.activate
+    def test_failed_catch_up_keeps_the_short_cadence(self) -> None:
+        provider, fake = _ready_provider_with_fake_sse()
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        try:
+            provider._on_sse_connected(fake)  # type: ignore[arg-type]
+            assert wait_until(lambda: provider._state == ProviderStatus.STALE)
+            assert provider._sse_connected
+            assert provider._poller is not None
+            assert provider._poller.interval_s == _DISCONNECTED_S
+        finally:
+            provider.shutdown()
+
+    @rsps_lib.activate
+    def test_failure_while_connected_restores_the_short_cadence(self) -> None:
+        provider, fake = _ready_provider_with_fake_sse()
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=304)  # catch-up
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)  # refetch, both attempts
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, status=304)  # recovery
+        try:
+            provider._on_sse_connected(fake)  # type: ignore[arg-type]
+            assert provider._poller is not None
+            assert wait_until(lambda: provider._poller.interval_s == _CONNECTED_S)
+
+            provider._on_sse_message(fake, SseMessage(type="refetchConfig"))  # type: ignore[arg-type]
+            assert wait_until(lambda: provider._state == ProviderStatus.STALE)
+            assert provider._sse_connected, "the stream itself is still up"
+            assert provider._poller.interval_s == _DISCONNECTED_S
+
+            # the next success with SSE still connected relaxes it again
+            provider._on_sse_message(fake, SseMessage(type="refetchConfig"))  # type: ignore[arg-type]
+            assert wait_until(lambda: provider._state == ProviderStatus.READY)
+            assert wait_until(lambda: provider._poller.interval_s == _CONNECTED_S)
+        finally:
+            provider.shutdown()
+
+    @rsps_lib.activate
+    def test_success_without_sse_keeps_the_short_cadence(self) -> None:
+        provider, _ = _ready_provider_with_fake_sse()
+        try:
+            provider._on_fetch_success()
+            assert provider._poller is not None
+            assert provider._poller.interval_s == _DISCONNECTED_S
         finally:
             provider.shutdown()
 
@@ -223,7 +285,8 @@ class TestSseConnectionLifecycle:
         try:
             provider._on_sse_connected(fake)  # type: ignore[arg-type]
             assert wait_until(lambda: _cdn_calls() == 2)
-            assert provider._poller.interval_s == _CONNECTED_S
+            assert provider._poller is not None
+            assert wait_until(lambda: provider._poller.interval_s == _CONNECTED_S)
             provider._on_sse_disconnected(fake)  # type: ignore[arg-type]
             provider._on_sse_disconnected(fake)  # type: ignore[arg-type]  # repeat fault while retrying
             assert not provider._sse_connected
@@ -252,7 +315,7 @@ class TestSseConnectionLifecycle:
             )
             assert provider._sse_connected
             assert provider._poller is not None
-            assert provider._poller.interval_s == _CONNECTED_S
+            assert wait_until(lambda: provider._poller.interval_s == _CONNECTED_S)
             assert events == []
         finally:
             provider.shutdown()
@@ -285,6 +348,65 @@ class TestSseConnectionLifecycle:
             assert not provider._sse_connected
             provider._on_sse_message(stale_stream, SseMessage(type="refetchConfig"))  # type: ignore[arg-type]
             assert not wait_until(lambda: _cdn_calls() > 1, timeout=0.2)
+        finally:
+            provider.shutdown()
+
+
+class TestSseUrlChanges:
+    # the catch-up fetch on connect stores the second CDN response, which is how the config changes here
+
+    @rsps_lib.activate
+    def test_rotated_url_reconnects_to_the_new_stream(self, sse_server: SseServer) -> None:
+        old_url, new_url = sse_server.url + "?v=1", sse_server.url + "?v=2"
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(old_url), status=200)
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(new_url), status=200)
+        provider = _make_provider()
+        provider.initialize()
+        old_manager = provider._sse_manager
+        try:
+            assert old_manager is not None
+            assert old_manager.url == old_url
+            assert wait_until(lambda: sse_server.paths == ["/sse?v=1", "/sse?v=2"])
+            assert provider._sse_manager is not old_manager
+            assert provider._sse_manager is not None
+            assert provider._sse_manager.url == new_url
+            # the old stream is closed, so only the new one remains
+            assert wait_until(lambda: sse_server.client_count == 1)
+            assert wait_until(lambda: provider._sse_connected)
+            # the new stream's catch-up fetch sees the same URL, so it settles instead of reconnecting again
+            assert not wait_until(lambda: _cdn_calls() > 3, timeout=0.5)
+        finally:
+            provider.shutdown()
+
+    @rsps_lib.activate
+    def test_withdrawn_stream_falls_back_to_polling(self, sse_server: SseServer) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200)
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(), status=200)
+        provider = _make_provider()
+        provider.initialize()
+        try:
+            assert wait_until(lambda: sse_server.paths == ["/sse"])
+            assert wait_until(lambda: _cdn_calls() == 2)
+            assert wait_until(lambda: provider._sse_manager is None)
+            assert not provider._sse_connected
+            assert provider._poller is not None
+            assert provider._poller.interval_s == _DISCONNECTED_S
+            assert wait_until(lambda: sse_server.client_count == 0)
+            assert provider._state == ProviderStatus.READY
+        finally:
+            provider.shutdown()
+
+    @rsps_lib.activate
+    def test_unchanged_url_keeps_the_stream(self, sse_server: SseServer) -> None:
+        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200)
+        provider = _make_provider()
+        provider.initialize()
+        manager = provider._sse_manager
+        try:
+            assert wait_until(lambda: _cdn_calls() == 2)
+            assert wait_until(lambda: provider._sse_connected)
+            assert provider._sse_manager is manager
+            assert len(sse_server.paths) == 1
         finally:
             provider.shutdown()
 

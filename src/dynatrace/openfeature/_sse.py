@@ -13,12 +13,13 @@ from ld_eventsource.actions import Event, Fault, Start
 from ld_eventsource.config import ConnectStrategy, ErrorStrategy, RetryDelayStrategy
 from urllib3.util import Timeout as Urllib3Timeout
 
+from ._cdn import REQUEST_TIMEOUT_S
 from ._sse_message import SseMessage
 
 log = logging.getLogger(__name__)
 
 # the stream is long-lived and idle between notifications, so only a dead connection should trip this
-SSE_READ_TIMEOUT_S: float = 150
+SSE_IDLE_TIMEOUT_S: float = 150
 # reconnect backoff: doubles from the initial delay up to the max, with jitter
 SSE_INITIAL_RETRY_DELAY_S: float = 1.0
 SSE_MAX_RETRY_DELAY_S: float = 30.0
@@ -93,6 +94,11 @@ class SseManager:
         self._pool = _StreamPool()
         self._thread: threading.Thread | None = None
 
+    @property
+    def url(self) -> str:
+        """The stream URL, credentials included; mask it before logging."""
+        return self._sse_url
+
     def start(self) -> None:
         """Open the stream on a daemon thread; returns without waiting for it to connect."""
         if self._thread is not None:
@@ -102,7 +108,9 @@ class SseManager:
                 self._sse_url,
                 pool=self._pool,
                 urllib3_request_options={
-                    "timeout": Urllib3Timeout(read=SSE_READ_TIMEOUT_S)
+                    "timeout": Urllib3Timeout(
+                        connect=REQUEST_TIMEOUT_S, read=SSE_IDLE_TIMEOUT_S
+                    )
                 },
             ),
             initial_retry_delay=SSE_INITIAL_RETRY_DELAY_S,

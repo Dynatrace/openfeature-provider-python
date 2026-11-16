@@ -15,6 +15,10 @@ from dynatrace.openfeature._cdn import (
     FetchResult,
 )
 from dynatrace.openfeature.options import DynatraceProviderOptions
+from dynatrace.openfeature.provider import (
+    _POLL_INTERVAL_S,
+    _SSE_CONNECTED_POLL_INTERVAL_S,
+)
 
 _KEY = "dt01.server_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5"
 _CDN_URL = "https://cdn.us.fm.dynatrace.com/server/" + _KEY + ".json"
@@ -167,7 +171,7 @@ class TestInitialize:
         p.shutdown()
 
 
-class TestFetchDurationInvariant:
+class TestPollIntervals:
     def test_rejects_poll_interval_below_max_fetch_duration(self) -> None:
         # The default 10s interval must stay above the 8.12s worst-case fetch.
         with pytest.raises(ValueError, match="maximum fetch duration"):
@@ -177,9 +181,15 @@ class TestFetchDurationInvariant:
         p = DynatraceProvider(_KEY, poll_interval_s=MAX_FETCH_DURATION_S + 0.01)
         p.shutdown()
 
-    def test_default_interval_satisfies_the_invariant(self) -> None:
+    def test_both_default_cadences_exceed_the_max_fetch_duration(self) -> None:
+        # providers.md 2.1: a poll must not outlive its interval
+        assert _POLL_INTERVAL_S > MAX_FETCH_DURATION_S
+        assert _SSE_CONNECTED_POLL_INTERVAL_S > MAX_FETCH_DURATION_S
+
+    def test_the_provider_uses_the_default_cadences(self) -> None:
         p = DynatraceProvider(_KEY)
-        assert p._poll_interval_s > MAX_FETCH_DURATION_S
+        assert p._poll_interval_s == _POLL_INTERVAL_S
+        assert p._sse_connected_poll_interval_s == _SSE_CONNECTED_POLL_INTERVAL_S
         p.shutdown()
 
 
