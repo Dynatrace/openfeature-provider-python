@@ -90,7 +90,9 @@ class TestSseStartup:
     def test_advertised_stream_connects_and_pulls_a_catch_up_fetch(
         self, sse_server: SseServer
     ) -> None:
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200)
+        rsps_lib.add(
+            rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200
+        )
         provider = _make_provider()
         provider.initialize()
         try:
@@ -112,7 +114,9 @@ class TestSseStartup:
         provider.initialize()
         try:
             assert provider._sse_manager is not None
-            assert provider._sse_manager._sse_url == "https://cdn.us.fm.dynatrace.com/sse"
+            assert (
+                provider._sse_manager._sse_url == "https://cdn.us.fm.dynatrace.com/sse"
+            )
         finally:
             provider.shutdown()
 
@@ -132,7 +136,9 @@ class TestSseStartup:
     def test_disable_sse_ignores_an_advertised_stream(
         self, sse_server: SseServer
     ) -> None:
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200)
+        rsps_lib.add(
+            rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200
+        )
         provider = _make_provider(disable_sse=True)
         provider.initialize()
         try:
@@ -144,14 +150,19 @@ class TestSseStartup:
     @rsps_lib.activate
     def test_unreachable_stream_stays_ready_and_polls_fast(self) -> None:
         rsps_lib.add(
-            rsps_lib.GET, _CDN_URL, body=_flag_config("http://127.0.0.1:1/sse"), status=200
+            rsps_lib.GET,
+            _CDN_URL,
+            body=_flag_config("http://127.0.0.1:1/sse"),
+            status=200,
         )
         provider = _make_provider()
         provider.initialize()
         try:
             assert provider._sse_manager is not None
             # faults before a first connect are not disconnects
-            assert not wait_until(lambda: provider._state != ProviderStatus.READY, timeout=0.5)
+            assert not wait_until(
+                lambda: provider._state != ProviderStatus.READY, timeout=0.5
+            )
             assert not provider._sse_connected
             assert provider._poller is not None
             assert provider._poller.interval_s == _DISCONNECTED_S
@@ -164,7 +175,9 @@ class TestSseStartup:
     ) -> None:
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=500)
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200)
+        rsps_lib.add(
+            rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200
+        )
         provider = _make_provider(poll_s=0.05)
         with pytest.raises(GeneralError):
             provider.initialize()
@@ -356,7 +369,9 @@ class TestSseUrlChanges:
     # the catch-up fetch on connect stores the second CDN response, which is how the config changes here
 
     @rsps_lib.activate
-    def test_rotated_url_reconnects_to_the_new_stream(self, sse_server: SseServer) -> None:
+    def test_rotated_url_reconnects_to_the_new_stream(
+        self, sse_server: SseServer
+    ) -> None:
         old_url, new_url = sse_server.url + "?v=1", sse_server.url + "?v=2"
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(old_url), status=200)
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(new_url), status=200)
@@ -379,8 +394,12 @@ class TestSseUrlChanges:
             provider.shutdown()
 
     @rsps_lib.activate
-    def test_withdrawn_stream_falls_back_to_polling(self, sse_server: SseServer) -> None:
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200)
+    def test_withdrawn_stream_falls_back_to_polling(
+        self, sse_server: SseServer
+    ) -> None:
+        rsps_lib.add(
+            rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200
+        )
         rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(), status=200)
         provider = _make_provider()
         provider.initialize()
@@ -398,7 +417,9 @@ class TestSseUrlChanges:
 
     @rsps_lib.activate
     def test_unchanged_url_keeps_the_stream(self, sse_server: SseServer) -> None:
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200)
+        rsps_lib.add(
+            rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200
+        )
         provider = _make_provider()
         provider.initialize()
         manager = provider._sse_manager
@@ -431,7 +452,11 @@ class TestSseMessages:
     @rsps_lib.activate
     def test_refetch_config_triggers_a_conditional_refetch(self) -> None:
         rsps_lib.add(
-            rsps_lib.GET, _CDN_URL, body=_flag_config(), status=200, headers={"ETag": '"v1"'}
+            rsps_lib.GET,
+            _CDN_URL,
+            body=_flag_config(),
+            status=200,
+            headers={"ETag": '"v1"'},
         )
         provider = _make_provider()
         provider.initialize()
@@ -440,7 +465,9 @@ class TestSseMessages:
             provider._sse_manager = fake  # type: ignore[assignment]
         rsps_lib.add(rsps_lib.GET, _CDN_URL, status=304)
         try:
-            provider._on_sse_message(fake, SseMessage(type="refetchConfig", last_modified=1))  # type: ignore[arg-type]
+            provider._on_sse_message(
+                fake, SseMessage(type="refetchConfig", last_modified=1)
+            )  # type: ignore[arg-type]
             assert wait_until(lambda: _cdn_calls() == 2)
             assert rsps_lib.calls[1].request.headers["If-None-Match"] == '"v1"'
         finally:
@@ -478,7 +505,9 @@ class TestSseShutdown:
 
     @rsps_lib.activate
     def test_shutdown_closes_the_live_stream(self, sse_server: SseServer) -> None:
-        rsps_lib.add(rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200)
+        rsps_lib.add(
+            rsps_lib.GET, _CDN_URL, body=_flag_config(sse_server.url), status=200
+        )
         provider = _make_provider()
         provider.initialize()
         assert wait_until(lambda: sse_server.client_count == 1)
