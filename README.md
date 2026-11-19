@@ -56,6 +56,21 @@ api.set_provider(
 | `metrics_origin` | `str` | derived from SDK key | Override the evaluation metrics ingest origin. |
 | `disable_sse` | `bool` | `False` | Don't attempt an SSE connection and poll only, every 10 seconds. |
 
+### Environment variables
+
+Options not set in code are read from the environment at construction. Precedence: code > environment variable > default. Empty values are ignored.
+
+| Option | Environment variable | Format |
+| --- | --- | --- |
+| `sdk_key` | `DT_FM_SDK_KEY` | string |
+| `config_origin` | `DT_FM_CONFIG_ORIGIN` | URL origin |
+| `metrics_origin` | `DT_FM_METRICS_ORIGIN` | URL origin |
+| `disable_sse` | `DT_FM_SSE_DISABLED` | `true` / `false` (case-insensitive) |
+
+> **Note:** if `config_origin` is set, carefully consider whether `metrics_origin` should be set too; an SDK proxy or custom host typically serves both.
+
+With `DT_FM_SDK_KEY` set, the key can be omitted: `DynatraceProvider()`.
+
 ## Running the e2e tests
 
 The shared [provider test harness](https://github.com/Dynatrace/fm-provider-test-harness) gherkin suite runs against its mock server in a container, so Docker is required:
