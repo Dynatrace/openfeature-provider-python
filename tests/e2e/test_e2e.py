@@ -147,11 +147,6 @@ def scenario(mock_server: MockServer) -> Iterator[Scenario]:
 
 @step("a mock server is running")
 def _a_mock_server_is_running(scenario: Scenario) -> None:
-    scenario.sse_enabled = False
-
-
-@step("a mock server with SSE enabled is running")
-def _a_mock_server_with_sse_enabled_is_running(scenario: Scenario) -> None:
     scenario.sse_enabled = True
 
 
