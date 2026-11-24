@@ -20,6 +20,7 @@ from openfeature.provider import AbstractProvider, Metadata, ProviderStatus
 from ._cdn import MAX_FETCH_DURATION_S as _MAX_FETCH_DURATION_S
 from ._cdn import CdnFetcher
 from ._cdn_config import extract_sse_url
+from ._env import ENV_SSE_DISABLED, resolve_bool
 from ._metrics_aggregator import (
     HARD_CAP_DISTINCT_FLAGS,
     SOFT_CAP_DISTINCT_FLAGS,
@@ -50,9 +51,15 @@ def _resolve_sdk_version() -> str:
 
 
 class DynatraceProvider(AbstractProvider):
+    """Dynatrace Feature Management provider.
+
+    If ``config_origin`` is set, carefully consider whether ``metrics_origin`` should be set
+    too; an SDK proxy or custom host typically serves both.
+    """
+
     def __init__(  # noqa: PLR0913 - public constructor with optional injectable seams
         self,
-        sdk_key: str,
+        sdk_key: str | None = None,
         *,
         config_origin: str | None = None,
         metrics_origin: str | None = None,
@@ -60,7 +67,7 @@ class DynatraceProvider(AbstractProvider):
         fetcher: CdnFetcher | None = None,
         metrics_flusher: EvaluationMetricsFlusher | None = None,
         poll_interval_s: float = _POLL_INTERVAL_S,
-        disable_sse: bool = False,
+        disable_sse: bool | None = None,
         grace_period_s: float = _GRACE_PERIOD_S,
         metrics_flush_interval_s: float = _METRICS_FLUSH_INTERVAL_S,
     ) -> None:
@@ -82,7 +89,7 @@ class DynatraceProvider(AbstractProvider):
         self._fetcher = fetcher or CdnFetcher(options)
         self._poll_interval_s = poll_interval_s
         self._sse_connected_poll_interval_s = _SSE_CONNECTED_POLL_INTERVAL_S
-        self._sse_enabled = not disable_sse
+        self._sse_enabled = not resolve_bool(disable_sse, ENV_SSE_DISABLED, False)
         self._grace_period_s = grace_period_s
         self._poller: PollingManager | None = None
         self._sse_manager: SseManager | None = None
@@ -97,7 +104,7 @@ class DynatraceProvider(AbstractProvider):
         self._metrics_aggregator = DynatraceMetricsAggregator(HARD_CAP_DISTINCT_FLAGS)
         self._metrics_flusher = metrics_flusher or EvaluationMetricsFlusher(
             self._metrics_aggregator,
-            sdk_key=sdk_key.strip(),
+            sdk_key=options._key,
             metrics_url=options.metrics_url,
             flush_interval_s=metrics_flush_interval_s,
             capacity_threshold=SOFT_CAP_DISTINCT_FLAGS,

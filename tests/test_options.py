@@ -21,13 +21,10 @@ class TestFromSdkKey:
         opts = DynatraceProviderOptions.from_sdk_key("  " + _VALID_KEY + "  ")
         assert opts.public_key == "dt01.server_us_abcdef1234"
 
-    def test_blank_key_raises(self) -> None:
-        with pytest.raises(ValueError, match="blank"):
-            DynatraceProviderOptions.from_sdk_key("   ")
-
-    def test_empty_key_raises(self) -> None:
-        with pytest.raises(ValueError, match="blank"):
-            DynatraceProviderOptions.from_sdk_key("")
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_blank_key_without_env_raises(self, value: str) -> None:
+        with pytest.raises(ValueError, match="DT_FM_SDK_KEY"):
+            DynatraceProviderOptions.from_sdk_key(value)
 
     def test_invalid_format_raises(self) -> None:
         with pytest.raises(ValueError, match="invalid key format"):
@@ -110,3 +107,77 @@ class TestFromSdkKey:
     def test_origin_with_path_raises(self, field: str, value: str) -> None:
         with pytest.raises(ValueError, match="path"):
             DynatraceProviderOptions.from_sdk_key(_VALID_KEY, **{field: value})
+
+
+_ENV_KEY = "dt01.server_eu_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5"
+
+
+class TestEnvVars:
+    def test_sdk_key_from_env(self, env: dict[str, str]) -> None:
+        env["DT_FM_SDK_KEY"] = _ENV_KEY
+        opts = DynatraceProviderOptions.from_sdk_key()
+        assert opts.public_key == "dt01.server_eu_abcdef1234"
+
+    def test_origins_from_env(self, env: dict[str, str]) -> None:
+        env["DT_FM_CONFIG_ORIGIN"] = "https://cdn.example.com"
+        env["DT_FM_METRICS_ORIGIN"] = "https://metrics.example.com"
+        opts = DynatraceProviderOptions.from_sdk_key(_VALID_KEY)
+        assert opts.cdn_url.startswith("https://cdn.example.com/server/")
+        assert opts.metrics_url == "https://metrics.example.com/v1/metrics"
+
+    def test_code_wins_over_env(self, env: dict[str, str]) -> None:
+        env["DT_FM_SDK_KEY"] = _ENV_KEY
+        env["DT_FM_CONFIG_ORIGIN"] = "https://cdn.env.example.com"
+        env["DT_FM_METRICS_ORIGIN"] = "https://metrics.env.example.com"
+        opts = DynatraceProviderOptions.from_sdk_key(
+            _VALID_KEY,
+            config_origin="https://cdn.code.example.com",
+            metrics_origin="https://metrics.code.example.com",
+        )
+        assert opts.public_key == "dt01.server_us_abcdef1234"
+        assert opts.cdn_url.startswith("https://cdn.code.example.com/server/")
+        assert opts.metrics_url == "https://metrics.code.example.com/v1/metrics"
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_blank_env_is_unset(self, env: dict[str, str], value: str) -> None:
+        env["DT_FM_CONFIG_ORIGIN"] = value
+        env["DT_FM_METRICS_ORIGIN"] = value
+        opts = DynatraceProviderOptions.from_sdk_key(_VALID_KEY)
+        # falls back to the key-derived defaults
+        assert opts.cdn_url.startswith("https://cdn.us.fm.dynatrace.com/server/")
+        assert opts.metrics_url == "https://metrics.us.fm.dynatrace.com/v1/metrics"
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_blank_code_sdk_key_falls_back_to_env(
+        self, env: dict[str, str], value: str
+    ) -> None:
+        env["DT_FM_SDK_KEY"] = _ENV_KEY
+        opts = DynatraceProviderOptions.from_sdk_key(value)
+        assert opts.public_key == "dt01.server_eu_abcdef1234"
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_missing_sdk_key_names_env_var(
+        self, env: dict[str, str], value: str
+    ) -> None:
+        env["DT_FM_SDK_KEY"] = value
+        with pytest.raises(ValueError, match="DT_FM_SDK_KEY"):
+            DynatraceProviderOptions.from_sdk_key()
+
+    def test_invalid_env_sdk_key_names_env_var(self, env: dict[str, str]) -> None:
+        env["DT_FM_SDK_KEY"] = (
+            "dt01.web_us_abcdef1234.de848e97a9cc4cc78aae568e65f49a9d_a1b2c3d4e5"
+        )
+        with pytest.raises(
+            ValueError, match="invalid key format in DT_FM_SDK_KEY"
+        ) as exc_info:
+            DynatraceProviderOptions.from_sdk_key()
+        # secret must not leak
+        assert "de848e97a9cc4cc78aae568e65f49a9d" not in str(exc_info.value)
+
+    @pytest.mark.parametrize("var", ["DT_FM_CONFIG_ORIGIN", "DT_FM_METRICS_ORIGIN"])
+    def test_invalid_env_origin_names_env_var(
+        self, env: dict[str, str], var: str
+    ) -> None:
+        env[var] = "https://example.com/some/path"
+        with pytest.raises(ValueError, match=f"{var} must not include a path"):
+            DynatraceProviderOptions.from_sdk_key(_VALID_KEY)

@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from urllib.parse import urlparse
 
+from ._env import ENV_CONFIG_ORIGIN, ENV_METRICS_ORIGIN, ENV_SDK_KEY, resolve
+
 # SDK key format per providers.md §3.0:
 # {token}.server_{geo}_{publicRandom}.{secret}_{sha1}
 _KEY_PATTERN = re.compile(
@@ -47,6 +49,17 @@ def _normalise_origin(value: str, field: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc.lower()}"
 
 
+def _resolve_origin(code_value: str | None, field: str, env_name: str) -> str | None:
+    """Return the normalised origin from code or env, or None to use the default."""
+    value, source = resolve(code_value, field, env_name)
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        raise ValueError(f"{field} must not be blank")
+    return _normalise_origin(value, source)
+
+
 class DynatraceProviderOptions:
     __slots__ = ("_cdn_url", "_key", "_metrics_url")
 
@@ -58,41 +71,37 @@ class DynatraceProviderOptions:
     @classmethod
     def from_sdk_key(
         cls,
-        sdk_key: str,
+        sdk_key: str | None = None,
         config_origin: str | None = None,
         metrics_origin: str | None = None,
     ) -> DynatraceProviderOptions:
-        if not sdk_key or not sdk_key.strip():
-            raise ValueError("sdk_key must not be null or blank")
+        """Build options; any argument left as None falls back to its DT_FM_* env var.
+
+        If ``config_origin`` is set, carefully consider whether ``metrics_origin`` should be
+        set too; an SDK proxy or custom host typically serves both.
+        """
+        if sdk_key is not None and not sdk_key.strip():
+            sdk_key = None
+        sdk_key, key_field = resolve(sdk_key, "sdk_key", ENV_SDK_KEY)
+        if sdk_key is None:
+            raise ValueError(f"SDK key is required; pass sdk_key or set {ENV_SDK_KEY}")
         trimmed = sdk_key.strip()
         key_match = _KEY_PATTERN.match(trimmed)
         if not key_match:
             last_dot = trimmed.rfind(".")
             public_part = trimmed[:last_dot] if last_dot > 0 else "<redacted>"
             raise ValueError(
-                f"invalid key format (public: {public_part!r}); "
+                f"invalid key format in {key_field} (public: {public_part!r}); "
                 "expected dt{NN}.server_{geo}_{rand}.{secret}_{sha}"
             )
         _token, platform, geo, _rand, _secret, _sha = key_match.groups()
-        if config_origin is not None:
-            config_origin = config_origin.strip()
-            if not config_origin:
-                raise ValueError("config_origin must not be blank")
-            origin = _normalise_origin(config_origin, "config_origin")
-            base = origin + "/" + platform + "/"
-        else:
-            base = f"https://cdn.{geo}.fm.dynatrace.com/{platform}/"
-        cdn_url = base + trimmed + ".json"
-        if metrics_origin is not None:
-            metrics_origin = metrics_origin.strip()
-            if not metrics_origin:
-                raise ValueError("metrics_origin must not be blank")
-            origin = _normalise_origin(metrics_origin, "metrics_origin")
-            resolved_metrics_url = origin + _METRICS_PATH
-        else:
-            resolved_metrics_url = (
-                f"https://metrics.{geo}.fm.dynatrace.com{_METRICS_PATH}"
-            )
+        config = _resolve_origin(config_origin, "config_origin", ENV_CONFIG_ORIGIN)
+        base = config or f"https://cdn.{geo}.fm.dynatrace.com"
+        cdn_url = f"{base}/{platform}/{trimmed}.json"
+        metrics = _resolve_origin(metrics_origin, "metrics_origin", ENV_METRICS_ORIGIN)
+        resolved_metrics_url = (
+            metrics or f"https://metrics.{geo}.fm.dynatrace.com"
+        ) + _METRICS_PATH
         return cls(key=trimmed, cdn_url=cdn_url, metrics_url=resolved_metrics_url)
 
     @property

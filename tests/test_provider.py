@@ -194,6 +194,64 @@ class TestPollIntervals:
         p.shutdown()
 
 
+class TestEnvVars:
+    def test_sdk_key_from_env(self, env: dict[str, str]) -> None:
+        env["DT_FM_SDK_KEY"] = _KEY
+        p = DynatraceProvider()
+        assert p._options.cdn_url == _CDN_URL
+        p.shutdown()
+
+    def test_missing_sdk_key_names_env_var(self) -> None:
+        with pytest.raises(ValueError, match="DT_FM_SDK_KEY"):
+            DynatraceProvider()
+
+    def test_invalid_env_origin_fails_construction(self, env: dict[str, str]) -> None:
+        env["DT_FM_CONFIG_ORIGIN"] = "ftp://cdn.example.com"
+        with pytest.raises(ValueError, match="DT_FM_CONFIG_ORIGIN must use http"):
+            DynatraceProvider(_KEY)
+
+    @pytest.mark.parametrize(
+        ("value", "sse_enabled"),
+        [
+            ("true", False),
+            (" TRUE ", False),
+            ("false", True),
+            ("False", True),
+            ("", True),
+            ("  ", True),
+        ],
+    )
+    def test_sse_disabled_from_env(
+        self, env: dict[str, str], value: str, sse_enabled: bool
+    ) -> None:
+        env["DT_FM_SSE_DISABLED"] = value
+        p = DynatraceProvider(_KEY)
+        assert p._sse_enabled is sse_enabled
+        p.shutdown()
+
+    def test_sse_enabled_by_default(self) -> None:
+        p = DynatraceProvider(_KEY)
+        assert p._sse_enabled is True
+        p.shutdown()
+
+    @pytest.mark.parametrize("disable_sse", [True, False])
+    def test_code_disable_sse_wins_over_env(
+        self, env: dict[str, str], disable_sse: bool
+    ) -> None:
+        env["DT_FM_SSE_DISABLED"] = str(not disable_sse).lower()
+        p = DynatraceProvider(_KEY, disable_sse=disable_sse)
+        assert p._sse_enabled is not disable_sse
+        p.shutdown()
+
+    @pytest.mark.parametrize("value", ["yes", "1", "off"])
+    def test_invalid_sse_disabled_fails_construction(
+        self, env: dict[str, str], value: str
+    ) -> None:
+        env["DT_FM_SSE_DISABLED"] = value
+        with pytest.raises(ValueError, match="DT_FM_SSE_DISABLED must be"):
+            DynatraceProvider(_KEY)
+
+
 class TestEvaluation:
     def setup_method(self) -> None:
         rsps_lib.start()
