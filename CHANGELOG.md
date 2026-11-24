@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.3.2](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.3.1...v0.3.2) (2026-11-24)
+
+
+### ✨ New Features
+
+* read provider config from environment variables (ref: AI-1638) ([#46](https://github.com/Dynatrace/openfeature-provider-python/issues/46)) ([614abc5](https://github.com/Dynatrace/openfeature-provider-python/commit/614abc54f0e3ab04eeb602d65d27380506cfe1f4))
+
+
+### 🐛 Bug Fixes
+
+* e2e background steps adjustments ([#47](https://github.com/Dynatrace/openfeature-provider-python/issues/47)) ([e220147](https://github.com/Dynatrace/openfeature-provider-python/commit/e220147be586374de827adcb92cf87190ee5a9a8))
+
+
+### 🧹 Chore
+
+* **deps-dev:** bump types-requests from 2.33.0.20260513 to 2.33.0.20261030 ([#42](https://github.com/Dynatrace/openfeature-provider-python/issues/42)) ([ada9cab](https://github.com/Dynatrace/openfeature-provider-python/commit/ada9cab0989e423c241103d75c265ab5e5d7ed98))
+* **deps-dev:** update uv-build requirement from ~=0.10.0 to &gt;=0.10,&lt;0.14 ([#43](https://github.com/Dynatrace/openfeature-provider-python/issues/43)) ([cc51bff](https://github.com/Dynatrace/openfeature-provider-python/commit/cc51bff95654811bf9d61cf6115f16b8f623d823))
+* fix ci dead-end if no releases ([#44](https://github.com/Dynatrace/openfeature-provider-python/issues/44)) ([9712671](https://github.com/Dynatrace/openfeature-provider-python/commit/9712671bc2e8e091e1d1288c7547e7895ba38a6c))
+
 ## [0.3.1](https://github.com/Dynatrace/openfeature-provider-python/compare/v0.3.0...v0.3.1) (2026-11-16)
 
 
